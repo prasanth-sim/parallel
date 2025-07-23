@@ -30,14 +30,15 @@ echo "  0) ALL"
 
 read -rp $'\n📌 Enter repo numbers to build (space-separated or 0 for all): ' -a SELECTED
 
-# Handle '0' or 'all' → select all repos
+# Select all if user enters 0 or 'all'
 if [[ "${SELECTED[0]}" == "0" || "${SELECTED[0],,}" == "all" ]]; then
   SELECTED=($(seq 1 ${#REPOS[@]}))
 fi
 
-COMMANDS=()
 BUILD_LOG_DIR="$HOME/automationlogs"
 mkdir -p "$BUILD_LOG_DIR"
+
+COMMANDS=()
 
 for idx in "${SELECTED[@]}"; do
   if ! [[ "$idx" =~ ^[0-9]+$ ]] || (( idx < 1 || idx > ${#REPOS[@]} )); then
@@ -48,16 +49,13 @@ for idx in "${SELECTED[@]}"; do
   i=$((idx - 1))
   REPO="${REPOS[$i]}"
   SCRIPT="${BUILD_SCRIPTS[$i]}"
-
   read -rp "🌿 Enter branch for ${REPO}: " BRANCH
 
   LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d_%H%M%S).log"
-
   CMD="bash -c '${SCRIPT} \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\"'"
   COMMANDS+=("$CMD")
 done
 
-# 🧠 Detect CPU cores (leave 1 free if possible)
 TOTAL_CPUS=$(nproc)
 CPU_CORES=$(( TOTAL_CPUS > 1 ? TOTAL_CPUS - 1 : 1 ))
 
