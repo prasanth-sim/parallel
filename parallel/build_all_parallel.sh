@@ -30,15 +30,14 @@ echo "  0) ALL"
 
 read -rp $'\n📌 Enter repo numbers to build (space-separated or 0 for all): ' -a SELECTED
 
-# Select all if user enters 0 or 'all'
+# Select all if '0' or 'all'
 if [[ "${SELECTED[0]}" == "0" || "${SELECTED[0],,}" == "all" ]]; then
   SELECTED=($(seq 1 ${#REPOS[@]}))
 fi
 
+COMMANDS=()
 BUILD_LOG_DIR="$HOME/automationlogs"
 mkdir -p "$BUILD_LOG_DIR"
-
-COMMANDS=()
 
 for idx in "${SELECTED[@]}"; do
   if ! [[ "$idx" =~ ^[0-9]+$ ]] || (( idx < 1 || idx > ${#REPOS[@]} )); then
@@ -49,10 +48,43 @@ for idx in "${SELECTED[@]}"; do
   i=$((idx - 1))
   REPO="${REPOS[$i]}"
   SCRIPT="${BUILD_SCRIPTS[$i]}"
-  read -rp "🌿 Enter branch for ${REPO}: " BRANCH
 
-  LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d_%H%M%S).log"
-  CMD="bash -c '${SCRIPT} \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\"'"
+  if [[ "$REPO" == "spriced-ui" ]]; then
+    # Clone/update spriced-pipeline only if spriced-ui is selected
+    REPO_URL="https://github.com/simaiserver/spriced-pipeline.git"
+    CLONE_DIR="$HOME/projects/spriced-pipeline"
+    mkdir -p "$(dirname "$CLONE_DIR")"
+
+    if [[ -d "$CLONE_DIR/.git" ]]; then
+      echo "📁 Repo 'spriced-pipeline' already cloned at $CLONE_DIR. Pulling latest changes..."
+      git -C "$CLONE_DIR" pull
+    else
+      echo "🚀 Cloning 'spriced-pipeline' repo to $CLONE_DIR..."
+      git clone "$REPO_URL" "$CLONE_DIR"
+    fi
+
+    echo -e "\n🌐 Choose environment for spriced-ui:"
+    echo "  1) dev"
+    echo "  2) qa"
+    echo "  3) test"
+    read -rp "📌 Enter environment number (1/2/3): " ENV_NUM
+    case "$ENV_NUM" in
+      1) ENV="dev" ;;
+      2) ENV="qa" ;;
+      3) ENV="test" ;;
+      *) echo "❌ Invalid environment selected"; exit 1 ;;
+    esac
+
+    read -rp $'\n🌿 Enter branch name for spriced-ui: ' BRANCH
+    LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d_%H%M%S).log"
+    CMD="bash -c '${SCRIPT} \"${ENV}\" \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\"'"
+
+  else
+    read -rp "🌿 Enter branch for ${REPO}: " BRANCH
+    LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d_%H%M%S).log"
+    CMD="bash -c '${SCRIPT} \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\"'"
+  fi
+
   COMMANDS+=("$CMD")
 done
 
