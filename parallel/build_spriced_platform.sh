@@ -4,55 +4,57 @@ trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
 
 # === Config ===
 REPO="spriced-platform"
-BRANCH="${1:-main}"
+BRANCH="${1:-main}"  # Accept branch from input
 DATE_TAG=$(date +"%Y%m%d_%H%M%S")
+
 LOG_DIR="$HOME/automationlogs"
 REPO_DIR="$HOME/projects/repos/$REPO"
-BUILD_DIR="$HOME/projects/builds/$REPO/${BRANCH//\//_}_$DATE_TAG"
-LATEST_LINK="$HOME/projects/builds/$REPO/latest"
+BUILD_ROOT="$HOME/projects/builds/$REPO"
+BUILD_DIR="$BUILD_ROOT/${BRANCH}_${DATE_TAG}"
+LATEST_LINK="$BUILD_ROOT/latest"
 
 mkdir -p "$LOG_DIR" "$BUILD_DIR"
+
 LOG_FILE="$LOG_DIR/${REPO}_${DATE_TAG}.log"
-exec &> >(tee -a "$LOG_FILE")
 
-echo "🚀 Starting build for [$REPO] on branch [$BRANCH]..."
+# === Logging Setup ===
+exec > >(tee "$LOG_FILE") 2>&1
+echo "📦 Starting build for [$REPO] on branch [$BRANCH]..."
 
-# === Git checkout ===
+# === Clone if not present ===
+if [[ ! -d "$REPO_DIR/.git" ]]; then
+  echo "📥 Cloning $REPO..."
+  git clone "https://github.com/simaiserver/$REPO.git" "$REPO_DIR"
+fi
+
 cd "$REPO_DIR"
-echo "🔄 Fetching branch [$BRANCH] from origin..."
-git fetch origin "$BRANCH"
+git fetch origin
 git checkout "$BRANCH"
-git reset --hard "origin/$BRANCH"
+git pull origin "$BRANCH"
 
-# === Maven Build ===
-echo "🔧 Running Maven build..."
-mvn clean install -DskipTests
+# === Build Root Project ===
+echo "🔧 Building root project..."
+mvn clean install -Dmaven.test.skip=true
 
-# === Copy Artifacts ===
-echo "📦 Copying build artifacts..."
-
-declare -A ARTIFACTS=(
-  ["spriced-platform"]="orchestratorRest,flinkRestImage"
+# === Build Submodules ===
+declare -A SUBMODULES=(
+  ["orchestratorRest"]="flink_rest_integration"
+  ["flinkRestImage"]="MyFlinkImage"
 )
 
-IFS=',' read -ra MODULES <<< "${ARTIFACTS[$REPO]}"
-
-for module in "${MODULES[@]}"; do
-  JAR_PATH="$REPO_DIR/$module/target"
-  JAR_FILE=$(find "$JAR_PATH" -maxdepth 1 -type f -name "*.jar" ! -name "*sources.jar" ! -name "*javadoc.jar" | head -n1)
-
-  if [[ -f "$JAR_FILE" ]]; then
-    cp "$JAR_FILE" "$BUILD_DIR/"
-    echo "✅ Copied $(basename "$JAR_FILE")"
-  else
-    echo "⚠️ JAR not found for module [$module]"
-  fi
+for mod in orchestratorRest flinkRestImage; do
+  mod_path="$REPO_DIR/$mod"
+  [[ -d "$mod_path" ]] && {
+    echo "🔧 Building submodule: $mod"
+    cd "$mod_path"
+    mvn clean install -Dmaven.test.skip=true
+    find target/ -type f -name "*.jar" ! -name "*original*" -exec cp -p {} "$BUILD_DIR/" \;
+  }
 done
 
-# === Update 'latest' symlink ===
+# === Create/Update Symlink ===
 ln -sfn "$BUILD_DIR" "$LATEST_LINK"
 
+# === Final Output ===
 echo "✅ Build complete for [$REPO] on branch [$BRANCH]"
-echo "🗂️ Artifacts: $BUILD_DIR"
-echo "📝 Log File: $LOG_FILE"
-
+echo "🗂️ Artifacts: $LATEST_LINK"

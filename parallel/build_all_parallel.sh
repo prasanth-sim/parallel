@@ -78,7 +78,6 @@ for idx in "${SELECTED[@]}"; do
     read -rp $'\n🌿 Enter branch name for spriced-ui: ' BRANCH
     LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d_%H%M%S).log"
     CMD="bash -c '${SCRIPT} \"${ENV}\" \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\"'"
-
   else
     read -rp "🌿 Enter branch for ${REPO}: " BRANCH
     LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d_%H%M%S).log"
@@ -89,9 +88,11 @@ for idx in "${SELECTED[@]}"; do
 done
 
 TOTAL_CPUS=$(nproc)
-CPU_CORES=$(( TOTAL_CPUS > 1 ? TOTAL_CPUS - 1 : 1 ))
+NUM_BUILDS=${#COMMANDS[@]}
+CPU_CORES=$(( NUM_BUILDS < TOTAL_CPUS ? NUM_BUILDS : TOTAL_CPUS ))
+CPU_CORES=$(( CPU_CORES > 0 ? CPU_CORES : 1 ))
 
-echo -e "\n🚀 Running ${#COMMANDS[@]} builds in parallel using ${CPU_CORES}/${TOTAL_CPUS} CPU cores...\n"
+echo -e "\n🚀 Running ${NUM_BUILDS} builds in parallel using ${CPU_CORES}/${TOTAL_CPUS} CPU cores...\n"
 printf "%s\n" "${COMMANDS[@]}" | parallel -j "$CPU_CORES" --tag --lb --bar
 
 echo -e "\n✅ All builds attempted. Check logs in: $BUILD_LOG_DIR"

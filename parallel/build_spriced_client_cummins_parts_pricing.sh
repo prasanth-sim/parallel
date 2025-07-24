@@ -1,6 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
-trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)" | tee -a "$LOG_FILE"' ERR
+trap 'echo "[ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)" | tee -a "$LOG_FILE"' ERR
 
 REPO_NAME="spriced-client-cummins-parts-pricing"
 BRANCH="${1:-main}"
@@ -15,7 +15,7 @@ LOG_FILE="$LOG_DIR/${REPO_NAME}_${BRANCH//\//_}_$DATE_TAG.log"
 mkdir -p "$BUILD_DIR" "$LOG_DIR"
 
 {
-echo "🔄 Building [$REPO_NAME] on branch [$BRANCH]..."
+echo " Building [$REPO_NAME] on branch [$BRANCH]..."
 
 # === Git pull ===
 cd "$REPO_DIR"
@@ -25,16 +25,16 @@ git checkout "$BRANCH"
 git pull origin "$BRANCH"
 
 # === Maven build ===
-echo "🛠️ Running Maven build..."
+echo "🛠️Running Maven build..."
 ./mvnw clean install -Dmaven.test.skip=true
 
 # === Copy JAR ===
 JAR_PATH=$(find "$REPO_DIR/target" -name "*.jar" ! -name "*original*" | head -n1)
 if [[ -f "$JAR_PATH" ]]; then
   cp -p "$JAR_PATH" "$BUILD_DIR/"
-  echo "✅ Copied JAR: $(basename "$JAR_PATH")"
+  echo " Copied JAR: $(basename "$JAR_PATH")"
 else
-  echo "⚠️ No JAR found to copy."
+  echo " No JAR found to copy."
 fi
 
 # === Done ===
