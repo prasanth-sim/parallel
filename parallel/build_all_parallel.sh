@@ -2,6 +2,24 @@
 set -Eeuo pipefail
 trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
 
+CLONE_DIR="$HOME/projects/repos"
+DEPLOY_DIR="$HOME/projects/builds"
+LOG_DIR="$HOME/automationlogs"
+DATE_TAG=$(date +"%Y%m%d_%H%M%S")
+TRACKER_FILE="$LOG_DIR/build-tracker-$DATE_TAG.csv"
+
+mkdir -p "$CLONE_DIR" "$DEPLOY_DIR" "$LOG_DIR"
+
+declare -A REPO_URLS=(
+  ["spriced-ui"]="https://github.com/simaiserver/spriced-ui.git"
+  ["spriced-backend"]="https://github.com/simaiserver/spriced-backend.git"
+  ["spriced-client-cummins-parts-pricing"]="https://github.com/simaiserver/spriced-client-cummins-parts-pricing.git"
+  ["spriced-client-cummins-data-ingestion"]="https://github.com/simaiserver/spriced-client-cummins-data-ingestion.git"
+  ["Stocking-Segmentation-Enhancement"]="https://github.com/simaiserver/Stocking-Segmentation-Enhancement.git"
+  ["spriced-platform"]="https://github.com/simaiserver/https://github.com/simaiserver/spriced-platform.git"
+  ["nrp-cummins-outbound"]="https://github.com/simaiserver/nrp-cummins-outbound.git"
+)
+
 REPOS=(
   "spriced-platform"
   "nrp-cummins-outbound"
@@ -48,19 +66,29 @@ for idx in "${SELECTED[@]}"; do
   i=$((idx - 1))
   REPO="${REPOS[$i]}"
   SCRIPT="${BUILD_SCRIPTS[$i]}"
+  REPO_DIR="$CLONE_DIR/$REPO"
+
+  # Clone or update the repo
+  if [[ -d "$REPO_DIR/.git" ]]; then
+    echo "📁 Repo '$REPO' already cloned at $REPO_DIR. Pulling latest changes..."
+    git -C "$REPO_DIR" pull
+  else
+    echo "🚀 Cloning '$REPO' into $REPO_DIR..."
+    git clone "${REPO_URLS[$REPO]}" "$REPO_DIR"
+  fi
 
   if [[ "$REPO" == "spriced-ui" ]]; then
-    # Clone/update spriced-pipeline only if spriced-ui is selected
-    REPO_URL="https://github.com/simaiserver/spriced-pipeline.git"
-    CLONE_DIR="$HOME/projects/spriced-pipeline"
-    mkdir -p "$(dirname "$CLONE_DIR")"
+    # Special case for spriced-ui: also clone spriced-pipeline
+    PIPELINE_DIR="$HOME/projects/spriced-pipeline"
+    PIPELINE_URL="https://github.com/simaiserver/spriced-pipeline.git"
+    mkdir -p "$(dirname "$PIPELINE_DIR")"
 
-    if [[ -d "$CLONE_DIR/.git" ]]; then
-      echo "📁 Repo 'spriced-pipeline' already cloned at $CLONE_DIR. Pulling latest changes..."
-      git -C "$CLONE_DIR" pull
+    if [[ -d "$PIPELINE_DIR/.git" ]]; then
+      echo "📁 Repo 'spriced-pipeline' already cloned at $PIPELINE_DIR. Pulling latest changes..."
+      git -C "$PIPELINE_DIR" pull
     else
-      echo "🚀 Cloning 'spriced-pipeline' repo to $CLONE_DIR..."
-      git clone "$REPO_URL" "$CLONE_DIR"
+      echo "🚀 Cloning 'spriced-pipeline' repo to $PIPELINE_DIR..."
+      git clone "$PIPELINE_URL" "$PIPELINE_DIR"
     fi
 
     echo -e "\n🌐 Choose environment for spriced-ui:"
@@ -76,11 +104,11 @@ for idx in "${SELECTED[@]}"; do
     esac
 
     read -rp $'\n🌿 Enter branch name for spriced-ui: ' BRANCH
-    LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d_%H%M%S).log"
+    LOG_FILE="$BUILD_LOG_DIR/${REPO}$(date +%Y%m%d%H%M%S).log"
     CMD="bash -c '${SCRIPT} \"${ENV}\" \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\"'"
   else
     read -rp "🌿 Enter branch for ${REPO}: " BRANCH
-    LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d_%H%M%S).log"
+    LOG_FILE="$BUILD_LOG_DIR/${REPO}$(date +%Y%m%d%H%M%S).log"
     CMD="bash -c '${SCRIPT} \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\"'"
   fi
 
