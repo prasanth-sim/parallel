@@ -1,50 +1,53 @@
 #!/bin/bash
 set -Eeuo pipefail
-trap 'echo "[ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
+trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
 
-REPO_NAME="spriced-client-cummins-data-ingestion"
-REPO_URL="https://github.com/simaiserver/${REPO_NAME}.git"
+# ==== CONFIGURATION ====
+REPO="spriced-client-cummins-data-ingestion"
 BRANCH="${1:-main}"
+DATE_TAG=$(date +"%Y%m%d_%H%M%S")
 
-CLONE_DIR="$HOME/projects/repos/$REPO_NAME"
-BUILD_DIR="$HOME/projects/builds/$REPO_NAME"
-LATEST_DIR="$BUILD_DIR/latest"
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+BASE_DIR="$HOME/projects"
+REPO_DIR="$BASE_DIR/repos/$REPO"
+BUILD_BASE="$BASE_DIR/builds/$REPO"
 LOG_DIR="$HOME/automationlogs"
-LOG_FILE="$LOG_DIR/build_${REPO_NAME}.log"
+mkdir -p "$REPO_DIR" "$BUILD_BASE" "$LOG_DIR"
 
-mkdir -p "$CLONE_DIR" "$BUILD_DIR" "$LOG_DIR"
+LOG_FILE="$LOG_DIR/${REPO//\//-}_${BRANCH}_${DATE_TAG}.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
-echo " [$TIMESTAMP] Starting build for $REPO_NAME | Branch: $BRANCH" | tee -a "$LOG_FILE"
+echo "🚀 Starting build for [$REPO] on branch [$BRANCH]"
 
-# Clone or pull latest
-if [ -d "$CLONE_DIR/.git" ]; then
-  echo " Repo exists. Pulling latest for $BRANCH..." | tee -a "$LOG_FILE"
-  cd "$CLONE_DIR"
-  git fetch origin "$BRANCH" | tee -a "$LOG_FILE"
-  git checkout "$BRANCH" | tee -a "$LOG_FILE"
-  git pull origin "$BRANCH" | tee -a "$LOG_FILE"
+# ==== CLONE OR UPDATE REPO ====
+if [[ -d "$REPO_DIR/.git" ]]; then
+  echo "🔁 Updating existing repo..."
+  cd "$REPO_DIR"
+  git fetch origin
+  git checkout "$BRANCH"
+  git pull origin "$BRANCH"
 else
-  echo " Cloning repo $REPO_NAME..." | tee -a "$LOG_FILE"
-  git clone --branch "$BRANCH" "$REPO_URL" "$CLONE_DIR" | tee -a "$LOG_FILE"
-  cd "$CLONE_DIR"
+  echo "📥 Cloning repo..."
+  git clone "https://github.com/simaiserver/$REPO.git" "$REPO_DIR"
+  cd "$REPO_DIR"
+  git checkout "$BRANCH"
 fi
 
-COMMIT_ID=$(git rev-parse --short HEAD)
-echo " Checked out to $BRANCH | Commit: $COMMIT_ID" | tee -a "$LOG_FILE"
+# ==== BUILD ====
+echo "🔨 Running Maven build..."
+mvn clean install -Dmaven.test.skip=true
 
-# Maven Build
-echo "Building the project with Maven..." | tee -a "$LOG_FILE"
-mvn clean package -DskipTests | tee -a "$LOG_FILE"
+# ==== COPY ARTIFACTS ====
+BUILD_DIR="$BUILD_BASE/${BRANCH}_${DATE_TAG}"
+mkdir -p "$BUILD_DIR"
 
-# Copy Artifacts
-echo " Copying artifacts to $LATEST_DIR..." | tee -a "$LOG_FILE"
-mkdir -p "$LATEST_DIR"
-cp target/*.jar "$LATEST_DIR" | tee -a "$LOG_FILE"
+echo "📦 Copying JARs to [$BUILD_DIR]..."
+find "$REPO_DIR" -type f -path "*/target/*.jar" ! -name "*original*" -exec cp -p {} "$BUILD_DIR/" \;
 
-# Create timestamped backup
-ARCHIVE_DIR="${BUILD_DIR}/${REPO_NAME}_${TIMESTAMP}"
-mkdir -p "$ARCHIVE_DIR"
-cp target/*.jar "$ARCHIVE_DIR" | tee -a "$LOG_FILE"
+# ==== UPDATE LATEST SYMLINK ====
+echo "🔗 Updating 'latest' symlink..."
+ln -sfn "$BUILD_DIR" "$BUILD_BASE/latest"
 
-echo " Build completed for $REPO_NAME at $TIMESTAMP" | tee -a "$LOG_FILE"
+# ==== DONE ====
+echo "✅ Build complete for [$REPO] on branch [$BRANCH]"
+echo "🗂️ Artifacts: $BUILD_DIR"
+echo "🔗 Latest: $BUILD_BASE/latest"

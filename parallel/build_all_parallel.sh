@@ -10,16 +10,18 @@ TRACKER_FILE="$LOG_DIR/build-tracker-$DATE_TAG.csv"
 
 mkdir -p "$CLONE_DIR" "$DEPLOY_DIR" "$LOG_DIR"
 
+# Define repository URLs
 declare -A REPO_URLS=(
   ["spriced-ui"]="https://github.com/simaiserver/spriced-ui.git"
   ["spriced-backend"]="https://github.com/simaiserver/spriced-backend.git"
   ["spriced-client-cummins-parts-pricing"]="https://github.com/simaiserver/spriced-client-cummins-parts-pricing.git"
   ["spriced-client-cummins-data-ingestion"]="https://github.com/simaiserver/spriced-client-cummins-data-ingestion.git"
   ["Stocking-Segmentation-Enhancement"]="https://github.com/simaiserver/Stocking-Segmentation-Enhancement.git"
-  ["spriced-platform"]="https://github.com/simaiserver/https://github.com/simaiserver/spriced-platform.git"
+  ["spriced-platform"]="https://github.com/simaiserver/spriced-platform.git"
   ["nrp-cummins-outbound"]="https://github.com/simaiserver/nrp-cummins-outbound.git"
 )
 
+# Define repository list and build scripts
 REPOS=(
   "spriced-platform"
   "nrp-cummins-outbound"
@@ -30,16 +32,19 @@ REPOS=(
   "spriced-client-cummins-parts-pricing"
 )
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 BUILD_SCRIPTS=(
-  "./build_spriced_platform.sh"
-  "./build_nrp_cummins_outbound.sh"
-  "./build_spriced_backend.sh"
-  "./build_spriced_ui.sh"
-  "./build_spriced_client_cummins_data_ingestion.sh"
-  "./build_stocking_segmentation_enhancement.sh"
-  "./build_spriced_client_cummins_parts_pricing.sh"
+  "$SCRIPT_DIR/build_spriced_platform.sh"
+  "$SCRIPT_DIR/build_nrp_cummins_outbound.sh"
+  "$SCRIPT_DIR/build_spriced_backend.sh"
+  "$SCRIPT_DIR/build_spriced_ui.sh"
+  "$SCRIPT_DIR/build_spriced_client_cummins_data_ingestion.sh"
+  "$SCRIPT_DIR/build_stocking_segmentation_enhancement.sh"
+  "$SCRIPT_DIR/build_spriced_client_cummins_parts_pricing.sh"
 )
 
+# Show list of available repositories
 echo "📦 Available Repositories:"
 for i in "${!REPOS[@]}"; do
   printf "  %d) %s\n" "$((i+1))" "${REPOS[$i]}"
@@ -48,13 +53,12 @@ echo "  0) ALL"
 
 read -rp $'\n📌 Enter repo numbers to build (space-separated or 0 for all): ' -a SELECTED
 
-# Select all if '0' or 'all'
 if [[ "${SELECTED[0]}" == "0" || "${SELECTED[0],,}" == "all" ]]; then
   SELECTED=($(seq 1 ${#REPOS[@]}))
 fi
 
 COMMANDS=()
-BUILD_LOG_DIR="$HOME/automationlogs"
+BUILD_LOG_DIR="$LOG_DIR"
 mkdir -p "$BUILD_LOG_DIR"
 
 for idx in "${SELECTED[@]}"; do
@@ -68,27 +72,25 @@ for idx in "${SELECTED[@]}"; do
   SCRIPT="${BUILD_SCRIPTS[$i]}"
   REPO_DIR="$CLONE_DIR/$REPO"
 
-  # Clone or update the repo
   if [[ -d "$REPO_DIR/.git" ]]; then
     echo "📁 Repo '$REPO' already cloned at $REPO_DIR. Pulling latest changes..."
-    git -C "$REPO_DIR" pull
+    git -C "$REPO_DIR" pull --quiet
   else
     echo "🚀 Cloning '$REPO' into $REPO_DIR..."
-    git clone "${REPO_URLS[$REPO]}" "$REPO_DIR"
+    git clone --quiet "${REPO_URLS[$REPO]}" "$REPO_DIR"
   fi
 
+  cd "$REPO_DIR"
+
   if [[ "$REPO" == "spriced-ui" ]]; then
-    # Special case for spriced-ui: also clone spriced-pipeline
     PIPELINE_DIR="$HOME/projects/spriced-pipeline"
     PIPELINE_URL="https://github.com/simaiserver/spriced-pipeline.git"
-    mkdir -p "$(dirname "$PIPELINE_DIR")"
-
     if [[ -d "$PIPELINE_DIR/.git" ]]; then
       echo "📁 Repo 'spriced-pipeline' already cloned at $PIPELINE_DIR. Pulling latest changes..."
-      git -C "$PIPELINE_DIR" pull
+      git -C "$PIPELINE_DIR" pull --quiet
     else
       echo "🚀 Cloning 'spriced-pipeline' repo to $PIPELINE_DIR..."
-      git clone "$PIPELINE_URL" "$PIPELINE_DIR"
+      git clone --quiet "$PIPELINE_URL" "$PIPELINE_DIR"
     fi
 
     echo -e "\n🌐 Choose environment for spriced-ui:"
@@ -104,14 +106,25 @@ for idx in "${SELECTED[@]}"; do
     esac
 
     read -rp $'\n🌿 Enter branch name for spriced-ui: ' BRANCH
-    LOG_FILE="$BUILD_LOG_DIR/${REPO}$(date +%Y%m%d%H%M%S).log"
+    git fetch --quiet && git checkout "$BRANCH" &>/dev/null || {
+      echo "❌ Branch '$BRANCH' not found in $REPO. Skipping...";
+      continue;
+    }
+
+    LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
     CMD="bash -c '${SCRIPT} \"${ENV}\" \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\"'"
   else
     read -rp "🌿 Enter branch for ${REPO}: " BRANCH
-    LOG_FILE="$BUILD_LOG_DIR/${REPO}$(date +%Y%m%d%H%M%S).log"
+    git fetch --quiet && git checkout "$BRANCH" &>/dev/null || {
+      echo "❌ Branch '$BRANCH' not found in $REPO. Skipping...";
+      continue;
+    }
+
+    LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
     CMD="bash -c '${SCRIPT} \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\"'"
   fi
 
+  echo "$REPO,$BRANCH" >> "$TRACKER_FILE"
   COMMANDS+=("$CMD")
 done
 
@@ -124,3 +137,4 @@ echo -e "\n🚀 Running ${NUM_BUILDS} builds in parallel using ${CPU_CORES}/${TO
 printf "%s\n" "${COMMANDS[@]}" | parallel -j "$CPU_CORES" --tag --lb --bar
 
 echo -e "\n✅ All builds attempted. Check logs in: $BUILD_LOG_DIR"
+echo "📄 Build tracker written to: $TRACKER_FILE"

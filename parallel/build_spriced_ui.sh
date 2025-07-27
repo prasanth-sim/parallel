@@ -72,6 +72,10 @@ for mf in "${MICROFRONTENDS[@]}"; do
   cp "$SRC_ENV_FILE" "$DEST_ENV_FILE"
   echo "[✅] Applied env for $mf"
 done
+if [ ! -d "node_modules" ]; then
+  echo "[🧩] Installing node modules..."
+  npm install
+fi
 
 # Build with Nx
 echo "[🏗️] Building projects..."

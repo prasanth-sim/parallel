@@ -1,33 +1,46 @@
 #!/bin/bash
 set -Eeuo pipefail
-trap 'echo "[ERROR] Line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
+trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
 
-# === Setup ===
-repo="nrp-cummins-outbound"
-branch="${1:-main}"
+# === Configuration ===
+REPO="nrp-cummins-outbound"
+BRANCH="${1:-main}"
 DATE_TAG=$(date +"%Y%m%d_%H%M%S")
+
+REPO_DIR="$HOME/projects/repos/$REPO"
+BUILD_DIR="$HOME/projects/builds/$REPO/${BRANCH//\//_}_$DATE_TAG"
+LATEST_LINK="$HOME/projects/builds/$REPO/latest"
 LOG_DIR="$HOME/automationlogs"
-REPO_DIR="$HOME/projects/repos/$repo"
-BUILD_DIR="$HOME/projects/builds/$repo/${branch//\//_}_$DATE_TAG"
-LATEST_LINK="$HOME/projects/builds/$repo/latest"
+LOG_FILE="$LOG_DIR/${REPO}_${BRANCH//\//_}_$DATE_TAG.log"
+GIT_URL="https://github.com/simaiserver/$REPO.git"
 
 mkdir -p "$LOG_DIR" "$BUILD_DIR"
 
-LOG_FILE="$LOG_DIR/${repo}_${branch//\//_}_$DATE_TAG.log"
+# Redirect all output to both log file and console
 exec &> >(tee -a "$LOG_FILE")
 
-echo " Starting build for [$repo] on branch [$branch]..."
+echo "🔧 Starting build for [$REPO] on branch [$BRANCH]..."
+echo "📅 Timestamp: $DATE_TAG"
 
-# === Git checkout ===
+# === Git Clone or Pull ===
+if [[ ! -d "$REPO_DIR/.git" ]]; then
+  echo "🚀 Cloning repository from $GIT_URL ..."
+  git clone "$GIT_URL" "$REPO_DIR"
+else
+  echo "📁 Repository already exists. Pulling latest..."
+  git -C "$REPO_DIR" fetch origin
+  git -C "$REPO_DIR" reset --hard "origin/$BRANCH"
+fi
+
 cd "$REPO_DIR"
-echo " Fetching latest from origin/$branch..."
-git fetch origin "$branch"
-git checkout "$branch"
-git reset --hard "origin/$branch"
+echo "🌐 Checking out branch [$BRANCH]..."
+git checkout "$BRANCH"
+git reset --hard "origin/$BRANCH"
 
 # === Maven Build ===
-echo " Building spriced-client-cummins-outbound-parent..."
-cd "$REPO_DIR/spriced-client-cummins-outbound-parent"
+PARENT_MODULE="$REPO_DIR/spriced-client-cummins-outbound-parent"
+echo "🔨 Building module: $PARENT_MODULE"
+cd "$PARENT_MODULE"
 mvn clean install -Dmaven.test.skip=true
 
 # === Define ARTIFACTS ===
@@ -36,22 +49,22 @@ declare -A ARTIFACTS=(
 )
 
 # === Copy Artifacts ===
-echo " Copying build artifacts to: $BUILD_DIR"
-IFS=',' read -ra MODULES <<< "${ARTIFACTS[$repo]}"
-for module in "${MODULES[@]}"; do
-  jar_path=$(find "$REPO_DIR" -path "*/$module/target/*.jar" ! -name "*original*" 2>/dev/null | head -n1)
-  if [[ -f "$jar_path" ]]; then
-    cp -p "$jar_path" "$BUILD_DIR/"
-    echo " Copied: $(basename "$jar_path")"
+echo "📦 Copying JAR artifacts to: $BUILD_DIR"
+IFS=',' read -ra MODULES <<< "${ARTIFACTS[$REPO]}"
+for MODULE in "${MODULES[@]}"; do
+  JAR_PATH=$(find "$REPO_DIR" -path "*/$MODULE/target/*.jar" ! -name "original-*.jar" 2>/dev/null | head -n 1)
+  if [[ -f "$JAR_PATH" ]]; then
+    cp -p "$JAR_PATH" "$BUILD_DIR/"
+    echo "✅ Copied: $(basename "$JAR_PATH")"
   else
-    echo "Missing artifact for module: $module"
+    echo "⚠️  Missing artifact for module: $MODULE"
   fi
 done
 
 # === Update latest symlink ===
 ln -snf "$BUILD_DIR" "$LATEST_LINK"
 
-echo "✅ Build completed for [$repo] at [$DATE_TAG]"
-echo "📁 Artifacts available in: $BUILD_DIR"
-echo "📄 Log saved to: $LOG_FILE"
-
+# === Summary ===
+echo "✅ Build complete for [$REPO] on branch [$BRANCH]"
+echo "📁 Artifacts stored at: $BUILD_DIR"
+echo "📄 Log saved at: $LOG_FILE"
