@@ -113,15 +113,33 @@ for idx in "${SELECTED[@]}"; do
     read -rp "🌿 Enter branch name [default: $DEFAULT_BRANCH]: " BRANCH
     BRANCH="${BRANCH:-$DEFAULT_BRANCH}"
 
-    if [[ -z "$BRANCH" ]]; then
-      echo "❌ No branch entered for $REPO. Skipping..."
+    # Backup potential conflicting files before checkout
+    BACKUP_DIR="/tmp/spriced_ui_backup_$DATE_TAG"
+    mkdir -p "$BACKUP_DIR"
+    find apps/ -type f -name ".env" -exec mv {} "$BACKUP_DIR" \; 2>/dev/null || true
+    mv package-lock.json "$BACKUP_DIR/" 2>/dev/null || true
+
+    git fetch origin
+    if git rev-parse --verify origin/"$BRANCH" >/dev/null 2>&1; then
+      git checkout -B "$BRANCH" origin/"$BRANCH"
+    else
+      echo "❌ Branch '$BRANCH' not found on origin. Skipping..."
       continue
     fi
 
-    git fetch --quiet && git checkout "$BRANCH" &>/dev/null || {
-      echo "❌ Branch '$BRANCH' not found. Skipping..."
-      continue
-    }
+    # Restore previously backed up files
+    find "$BACKUP_DIR" -name ".env" -exec cp {} ./apps/ \;
+    cp "$BACKUP_DIR/package-lock.json" ./ 2>/dev/null || true
+
+    # Copy environment-specific .env from pipeline
+    ENV_FILE_SOURCE="$PIPELINE_DIR/framework/frontend/nrp-$ENV/spriced-data/.env"
+    ENV_FILE_DEST="$REPO_DIR/.env"
+    if [[ -f "$ENV_FILE_SOURCE" ]]; then
+      cp "$ENV_FILE_SOURCE" "$ENV_FILE_DEST"
+      echo "📄 Copied .env from pipeline [$ENV] to spriced-ui"
+    else
+      echo "⚠️ .env file not found for environment [$ENV]. Skipping copy."
+    fi
 
     LOG_FILE="$LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
     CMD="bash -c '${SCRIPT} \"${ENV}\" \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},SUCCESS,${LOG_FILE}\" >> \"${TRACKER_FILE}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},FAIL,${LOG_FILE}\" >> \"${TRACKER_FILE}\"'"
@@ -129,15 +147,13 @@ for idx in "${SELECTED[@]}"; do
     read -rp "🌿 Enter branch for ${REPO} [default: $DEFAULT_BRANCH]: " BRANCH
     BRANCH="${BRANCH:-$DEFAULT_BRANCH}"
 
-    if [[ -z "$BRANCH" ]]; then
-      echo "❌ No branch entered for $REPO. Skipping..."
+    git fetch origin
+    if git rev-parse --verify origin/"$BRANCH" >/dev/null 2>&1; then
+      git checkout -B "$BRANCH" origin/"$BRANCH"
+    else
+      echo "❌ Branch '$BRANCH' not found on origin. Skipping..."
       continue
     fi
-
-    git fetch --quiet && git checkout "$BRANCH" &>/dev/null || {
-      echo "❌ Branch '$BRANCH' not found. Skipping..."
-      continue
-    }
 
     LOG_FILE="$LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
     CMD="bash -c '${SCRIPT} \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},SUCCESS,${LOG_FILE}\" >> \"${TRACKER_FILE}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},FAIL,${LOG_FILE}\" >> \"${TRACKER_FILE}\"'"
