@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
 
+# === Paths & Setup ===
 CLONE_DIR="$HOME/projects/repos"
 DEPLOY_DIR="$HOME/projects/builds"
 LOG_DIR="$HOME/automationlogs"
@@ -10,6 +11,7 @@ TRACKER_FILE="$LOG_DIR/build-tracker-${DATE_TAG}.csv"
 
 mkdir -p "$CLONE_DIR" "$DEPLOY_DIR" "$LOG_DIR"
 
+# === Repo Configs ===
 declare -A REPO_URLS=(
   ["spriced-ui"]="https://github.com/simaiserver/spriced-ui.git"
   ["spriced-backend"]="https://github.com/simaiserver/spriced-backend.git"
@@ -41,7 +43,6 @@ REPOS=(
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 BUILD_SCRIPTS=(
   "$SCRIPT_DIR/build_spriced_platform.sh"
   "$SCRIPT_DIR/build_nrp_cummins_outbound.sh"
@@ -52,21 +53,20 @@ BUILD_SCRIPTS=(
   "$SCRIPT_DIR/build_spriced_client_cummins_parts_pricing.sh"
 )
 
-echo "📦 Available Repositories:"
+# === Select Repositories ===
+echo -e "\n📦 Available Repositories:"
 for i in "${!REPOS[@]}"; do
   printf "  %d) %s\n" "$((i+1))" "${REPOS[$i]}"
 done
 echo "  0) ALL"
 
 read -rp $'\n📌 Enter repo numbers to build (space-separated or 0 for all): ' -a SELECTED
-
 if [[ "${SELECTED[0]}" == "0" || "${SELECTED[0],,}" == "all" ]]; then
   SELECTED=($(seq 1 ${#REPOS[@]}))
 fi
 
 COMMANDS=()
-BUILD_LOG_DIR="$LOG_DIR"
-mkdir -p "$BUILD_LOG_DIR"
+mkdir -p "$LOG_DIR"
 
 for idx in "${SELECTED[@]}"; do
   if ! [[ "$idx" =~ ^[0-9]+$ ]] || (( idx < 1 || idx > ${#REPOS[@]} )); then
@@ -80,11 +80,10 @@ for idx in "${SELECTED[@]}"; do
   REPO_DIR="$CLONE_DIR/$REPO"
   DEFAULT_BRANCH="${DEFAULT_BRANCHES[$REPO]}"
 
+  echo -e "\n🚀 Cloning '$REPO'..."
   if [[ -d "$REPO_DIR/.git" ]]; then
-    echo "📁 Repo '$REPO' already cloned. Pulling latest..."
     git -C "$REPO_DIR" pull --quiet
   else
-    echo "🚀 Cloning '$REPO'..."
     git clone --quiet "${REPO_URLS[$REPO]}" "$REPO_DIR"
   fi
 
@@ -124,7 +123,7 @@ for idx in "${SELECTED[@]}"; do
       continue
     }
 
-    LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
+    LOG_FILE="$LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
     CMD="bash -c '${SCRIPT} \"${ENV}\" \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},SUCCESS,${LOG_FILE}\" >> \"${TRACKER_FILE}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},FAIL,${LOG_FILE}\" >> \"${TRACKER_FILE}\"'"
   else
     read -rp "🌿 Enter branch for ${REPO} [default: $DEFAULT_BRANCH]: " BRANCH
@@ -140,7 +139,7 @@ for idx in "${SELECTED[@]}"; do
       continue
     }
 
-    LOG_FILE="$BUILD_LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
+    LOG_FILE="$LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
     CMD="bash -c '${SCRIPT} \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},SUCCESS,${LOG_FILE}\" >> \"${TRACKER_FILE}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},FAIL,${LOG_FILE}\" >> \"${TRACKER_FILE}\"'"
   fi
 
@@ -155,21 +154,4 @@ CPU_CORES=$(( CPU_CORES > 0 ? CPU_CORES : 1 ))
 
 echo -e "\n🚀 Running ${NUM_BUILDS} builds in parallel using ${CPU_CORES}/${TOTAL_CPUS} CPU cores...\n"
 printf "%s\n" "${COMMANDS[@]}" | parallel -j "$CPU_CORES" --lb --bar
-
-# === Clean Build Summary ===
-echo -e "\n================= 🧾 Build Summary ================="
-
-if [[ -f "$TRACKER_FILE" ]]; then
-  while IFS=',' read -r repo status logfile; do
-    if [[ "$status" == "SUCCESS" ]]; then
-      echo "[✅ SUCCESS] $repo - Log: $logfile"
-    else
-      echo "[❌ FAIL]    $repo - Log: $logfile"
-    fi
-  done < "$TRACKER_FILE"
-else
-  echo "⚠️ No tracker file found."
-fi
-
-echo "===================================================="
 echo "📄 Build tracker written to: $TRACKER_FILE"
