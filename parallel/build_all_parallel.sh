@@ -174,11 +174,9 @@ for idx in "${SELECTED[@]}"; do
 done
 
 # === Parallel Build Execution ===
-TOTAL_CPUS=$(nproc)
-NUM_BUILDS=${#COMMANDS[@]}
-CPU_CORES=$(( NUM_BUILDS < TOTAL_CPUS ? NUM_BUILDS : TOTAL_CPUS ))
-CPU_CORES=$(( CPU_CORES > 0 ? CPU_CORES : 1 ))
+# === Parallel Build Execution ===
+CPU_CORES=$(nproc)
 
-echo -e "\n🚀 Running ${NUM_BUILDS} builds in parallel using ${CPU_CORES}/${TOTAL_CPUS} CPU cores...\n"
-printf "%s\n" "${COMMANDS[@]}" | parallel -j "$CPU_CORES" --lb --bar
-echo "📄 Build tracker written to: $TRACKER_FILE"
+echo -e "\n🚀 Running ${#COMMANDS[@]} builds in parallel using ${CPU_CORES} CPU cores...\n"
+printf "%s\n" "${COMMANDS[@]}" | parallel -j "$CPU_CORES" --tag --lb --bar
+echo -e "\n📄 Build tracker written to: $TRACKER_FILE"
