@@ -80,14 +80,28 @@ for idx in "${SELECTED[@]}"; do
   REPO_DIR="$CLONE_DIR/$REPO"
   DEFAULT_BRANCH="${DEFAULT_BRANCHES[$REPO]}"
 
-  echo -e "\n🚀 Cloning '$REPO'..."
-  if [[ -d "$REPO_DIR/.git" ]]; then
-    git -C "$REPO_DIR" pull --quiet
-  else
-    git clone --quiet "${REPO_URLS[$REPO]}" "$REPO_DIR"
-  fi
+  echo -e "\n🚀 Checking '$REPO' repository..."
 
-  cd "$REPO_DIR"
+  if [[ -d "$REPO_DIR/.git" ]]; then
+    echo "🔄 Updating existing repo at $REPO_DIR"
+    cd "$REPO_DIR"
+
+    git fetch origin --prune
+    git reset --hard HEAD
+    git clean -fd
+
+    if git rev-parse --verify "origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
+      git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+    else
+      echo "❌ Remote branch origin/$DEFAULT_BRANCH not found. Skipping..."
+      continue
+    fi
+  else
+    echo "📥 Cloning new repo from ${REPO_URLS[$REPO]} into $REPO_DIR"
+    [[ -d "$REPO_DIR" && ! -d "$REPO_DIR/.git" ]] && rm -rf "$REPO_DIR"
+    git clone "${REPO_URLS[$REPO]}" "$REPO_DIR"
+    cd "$REPO_DIR"
+  fi
 
   if [[ "$REPO" == "spriced-ui" ]]; then
     PIPELINE_DIR="$HOME/projects/spriced-pipeline"
@@ -113,7 +127,6 @@ for idx in "${SELECTED[@]}"; do
     read -rp "🌿 Enter branch name [default: $DEFAULT_BRANCH]: " BRANCH
     BRANCH="${BRANCH:-$DEFAULT_BRANCH}"
 
-    # Backup potential conflicting files before checkout
     BACKUP_DIR="/tmp/spriced_ui_backup_$DATE_TAG"
     mkdir -p "$BACKUP_DIR"
     find apps/ -type f -name ".env" -exec mv {} "$BACKUP_DIR" \; 2>/dev/null || true
@@ -127,11 +140,9 @@ for idx in "${SELECTED[@]}"; do
       continue
     fi
 
-    # Restore previously backed up files
     find "$BACKUP_DIR" -name ".env" -exec cp {} ./apps/ \;
     cp "$BACKUP_DIR/package-lock.json" ./ 2>/dev/null || true
 
-    # Copy environment-specific .env from pipeline
     ENV_FILE_SOURCE="$PIPELINE_DIR/framework/frontend/nrp-$ENV/spriced-data/.env"
     ENV_FILE_DEST="$REPO_DIR/.env"
     if [[ -f "$ENV_FILE_SOURCE" ]]; then
