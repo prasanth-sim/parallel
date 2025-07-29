@@ -1,16 +1,18 @@
 #!/bin/bash
 set -Eeuo pipefail
-trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
+trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
 
-# === Configuration ===
-REPO="nrp-cummins-outbound"
+# === Inputs ===
 BRANCH="${1:-main}"
+BASE_DIR="${2:-$HOME/build-default}"  # fallback if not passed
+REPO="nrp-cummins-outbound"
 DATE_TAG=$(date +"%Y%m%d_%H%M%S")
 
-REPO_DIR="$HOME/projects/repos/$REPO"
-BUILD_DIR="$HOME/projects/builds/$REPO/${BRANCH//\//_}_$DATE_TAG"
-LATEST_LINK="$HOME/projects/builds/$REPO/latest"
-LOG_DIR="$HOME/automationlogs"
+# === Derived Paths ===
+REPO_DIR="$BASE_DIR/repos/$REPO"
+BUILD_DIR="$BASE_DIR/builds/$REPO/${BRANCH//\//_}_$DATE_TAG"
+LATEST_LINK="$BASE_DIR/builds/$REPO/latest"
+LOG_DIR="$BASE_DIR/automationlogs"
 LOG_FILE="$LOG_DIR/${REPO}_${BRANCH//\//_}_$DATE_TAG.log"
 GIT_URL="https://github.com/simaiserver/$REPO.git"
 

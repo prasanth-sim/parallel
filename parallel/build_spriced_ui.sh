@@ -4,8 +4,9 @@ trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)" >&2; rm -rf "$BUI
 
 ENV="${1:-}"
 BRANCH="${2:-main}"
-VALID_ENVS=("dev" "qa" "test")
+BASE_DIR="${3:-$HOME/projects}"  # Accept from main script
 
+VALID_ENVS=("dev" "qa" "test")
 if [[ ! " ${VALID_ENVS[*]} " =~ " ${ENV} " ]]; then
   echo "❌ Invalid environment: '$ENV'. Use one of: ${VALID_ENVS[*]}"
   exit 1
@@ -13,18 +14,16 @@ fi
 
 command -v npx >/dev/null || { echo "❌ 'npx' not found. Install Node.js first."; exit 1; }
 
-TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
 REPO="spriced-ui"
 REPO_URL="https://github.com/simaiserver/$REPO.git"
-
-BASE_DIR="$HOME/projects"
 REPO_DIR="$BASE_DIR/repos/$REPO"
 BUILD_ROOT="$BASE_DIR/builds/$REPO/$ENV/latest"
+LOG_DIR="$BASE_DIR/automationlogs"
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
 BUILD_DIR="$BUILD_ROOT/${BRANCH}_${TIMESTAMP}"
-LOG_DIR="$HOME/automationlogs"
 LOG_FILE="$LOG_DIR/${REPO}_${ENV}_${BRANCH}_${TIMESTAMP}.log"
 
-CONFIG_PIPELINE_BASE="$HOME/projects/spriced-pipeline/framework/frontend/nrp-$ENV"
+CONFIG_PIPELINE_BASE="$BASE_DIR/spriced-pipeline/framework/frontend/nrp-$ENV"
 MANIFEST_SOURCE="$CONFIG_PIPELINE_BASE/module-federation.manifest.json"
 
 MICROFRONTENDS=(
@@ -72,17 +71,19 @@ for mf in "${MICROFRONTENDS[@]}"; do
   cp "$SRC_ENV_FILE" "$DEST_ENV_FILE"
   echo "[✅] Applied env for $mf"
 done
+
+# Install node_modules
 if [ ! -d "node_modules" ]; then
   echo "[🧩] Installing node modules..."
   npm install
 fi
 
-# Build with Nx
+# Build using Nx
 echo "[🏗️] Building projects..."
 rm -rf dist/
 npx nx run-many --target=build --projects=$(IFS=,; echo "${MICROFRONTENDS[*]}")
 
-# Copy output
+# Copy artifacts
 echo "[📂] Copying output to $BUILD_DIR"
 for APP_DIR in dist/apps/*; do
   APP_NAME=$(basename "$APP_DIR")

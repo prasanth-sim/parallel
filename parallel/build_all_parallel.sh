@@ -2,11 +2,15 @@
 set -Eeuo pipefail
 trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
 
-# === Paths & Setup ===
-CLONE_DIR="$HOME/projects/repos"
-DEPLOY_DIR="$HOME/projects/builds"
-LOG_DIR="$HOME/automationlogs"
+# === Prompt for Base Directory ===
+read -rp "📁 Enter base directory for cloning/building/logs (relative to ~): " BASE_INPUT
+BASE_DIR="$HOME/$BASE_INPUT"
 DATE_TAG=$(date +"%Y%m%d_%H%M%S")
+
+# === Paths Based on User Input ===
+CLONE_DIR="$BASE_DIR/repos"
+DEPLOY_DIR="$BASE_DIR/builds"
+LOG_DIR="$BASE_DIR/automationlogs"
 TRACKER_FILE="$LOG_DIR/build-tracker-${DATE_TAG}.csv"
 
 mkdir -p "$CLONE_DIR" "$DEPLOY_DIR" "$LOG_DIR"
@@ -53,7 +57,7 @@ BUILD_SCRIPTS=(
   "$SCRIPT_DIR/build_spriced_client_cummins_parts_pricing.sh"
 )
 
-# === Select Repositories ===
+# === Display Repo Selection Menu ===
 echo -e "\n📦 Available Repositories:"
 for i in "${!REPOS[@]}"; do
   printf "  %d) %s\n" "$((i+1))" "${REPOS[$i]}"
@@ -66,8 +70,8 @@ if [[ "${SELECTED[0]}" == "0" || "${SELECTED[0],,}" == "all" ]]; then
 fi
 
 COMMANDS=()
-mkdir -p "$LOG_DIR"
 
+# === Prepare Build Commands ===
 for idx in "${SELECTED[@]}"; do
   if ! [[ "$idx" =~ ^[0-9]+$ ]] || (( idx < 1 || idx > ${#REPOS[@]} )); then
     echo "⚠️ Invalid selection: $idx. Skipping..."
@@ -85,11 +89,9 @@ for idx in "${SELECTED[@]}"; do
   if [[ -d "$REPO_DIR/.git" ]]; then
     echo "🔄 Updating existing repo at $REPO_DIR"
     cd "$REPO_DIR"
-
     git fetch origin --prune
     git reset --hard HEAD
     git clean -fd
-
     if git rev-parse --verify "origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
       git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
     else
@@ -104,7 +106,7 @@ for idx in "${SELECTED[@]}"; do
   fi
 
   if [[ "$REPO" == "spriced-ui" ]]; then
-    PIPELINE_DIR="$HOME/projects/spriced-pipeline"
+    PIPELINE_DIR="$BASE_DIR/spriced-pipeline"
     PIPELINE_URL="https://github.com/simaiserver/spriced-pipeline.git"
     if [[ -d "$PIPELINE_DIR/.git" ]]; then
       git -C "$PIPELINE_DIR" pull --quiet
@@ -145,15 +147,10 @@ for idx in "${SELECTED[@]}"; do
 
     ENV_FILE_SOURCE="$PIPELINE_DIR/framework/frontend/nrp-$ENV/spriced-data/.env"
     ENV_FILE_DEST="$REPO_DIR/.env"
-    if [[ -f "$ENV_FILE_SOURCE" ]]; then
-      cp "$ENV_FILE_SOURCE" "$ENV_FILE_DEST"
-      echo "📄 Copied .env from pipeline [$ENV] to spriced-ui"
-    else
-      echo "⚠️ .env file not found for environment [$ENV]. Skipping copy."
-    fi
+    [[ -f "$ENV_FILE_SOURCE" ]] && cp "$ENV_FILE_SOURCE" "$ENV_FILE_DEST"
 
     LOG_FILE="$LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
-    CMD="bash -c '${SCRIPT} \"${ENV}\" \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},SUCCESS,${LOG_FILE}\" >> \"${TRACKER_FILE}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},FAIL,${LOG_FILE}\" >> \"${TRACKER_FILE}\"'"
+    CMD="bash -c '${SCRIPT} \"${ENV}\" \"${BRANCH}\" \"${BASE_DIR}\" &>> \"${LOG_FILE}\" && echo \"${REPO},SUCCESS,${LOG_FILE}\" >> \"${TRACKER_FILE}\" || echo \"${REPO},FAIL,${LOG_FILE}\" >> \"${TRACKER_FILE}\"'"
   else
     read -rp "🌿 Enter branch for ${REPO} [default: $DEFAULT_BRANCH]: " BRANCH
     BRANCH="${BRANCH:-$DEFAULT_BRANCH}"
@@ -167,16 +164,29 @@ for idx in "${SELECTED[@]}"; do
     fi
 
     LOG_FILE="$LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
-    CMD="bash -c '${SCRIPT} \"${BRANCH}\" &>> \"${LOG_FILE}\" && echo \"[✔️ DONE] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},SUCCESS,${LOG_FILE}\" >> \"${TRACKER_FILE}\" || echo \"[❌ FAIL] ${REPO} - see log: ${LOG_FILE}\" && echo \"${REPO},FAIL,${LOG_FILE}\" >> \"${TRACKER_FILE}\"'"
+    CMD="bash -c '${SCRIPT} \"${BRANCH}\" \"${BASE_DIR}\" &>> \"${LOG_FILE}\" && echo \"${REPO},SUCCESS,${LOG_FILE}\" >> \"${TRACKER_FILE}\" || echo \"${REPO},FAIL,${LOG_FILE}\" >> \"${TRACKER_FILE}\"'"
   fi
 
   COMMANDS+=("$CMD")
 done
 
-# === Parallel Build Execution ===
-# === Parallel Build Execution ===
+# === Parallel Execution ===
 CPU_CORES=$(nproc)
-
 echo -e "\n🚀 Running ${#COMMANDS[@]} builds in parallel using ${CPU_CORES} CPU cores...\n"
-printf "%s\n" "${COMMANDS[@]}" | parallel -j "$CPU_CORES" --tag --lb --bar
+printf "%s\n" "${COMMANDS[@]}" | parallel -j "$CPU_CORES" --no-notice --bar
+
+# === Summary Output ===
+echo -e "\n🧾 Build Summary:\n"
+if [[ -f "$TRACKER_FILE" ]]; then
+  while IFS=',' read -r REPO STATUS LOGFILE; do
+    if [[ "$STATUS" == "SUCCESS" ]]; then
+      echo "[✔️ DONE] $REPO - see log: $LOGFILE"
+    else
+      echo "[❌ FAIL] $REPO - see log: $LOGFILE"
+    fi
+  done < "$TRACKER_FILE"
+else
+  echo "⚠️ Build tracker not found!"
+fi
+
 echo -e "\n📄 Build tracker written to: $TRACKER_FILE"
