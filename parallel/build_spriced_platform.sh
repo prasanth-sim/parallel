@@ -49,7 +49,9 @@ for module in "${MODULES[@]}"; do
     echo "⚠️ No valid JAR found in [$MOD_PATH]"
   else
     while IFS= read -r jar; do
-      cp -p "$jar" "$BUILD_DIR/"
+      # Removed the -p flag from the cp command.
+      # This will ensure the modification timestamp is updated to the current time.
+      cp "$jar" "$BUILD_DIR/"
       echo "✅ Copied: $(basename "$jar")"
     done <<< "$JAR_FILES"
   fi

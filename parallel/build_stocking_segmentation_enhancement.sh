@@ -33,7 +33,7 @@ else
 fi
 
 echo "⚙️ Building with Maven..." | tee -a "$LOG_FILE"
-mvn clean install -DskipTests | tee -a "$LOG_FILE"
+mvn clean install -Dmaven.test.skip=true | tee -a "$LOG_FILE"
 
 echo "🔍 Searching for artifact..." | tee -a "$LOG_FILE"
 JAR_PATH=$(find target -name "${MODULE_NAME}-*.jar" ! -name "*original*" | head -n1)
