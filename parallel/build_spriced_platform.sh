@@ -1,7 +1,7 @@
 #!/bin/bash
 # Enable strict error checking and a trap to report errors
 set -Eeuo pipefail
-trap 'echo "[❌ ERROR] Line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
+trap 'echo "[ERROR] Line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
 
 # --- Script Configuration ---
 REPO="spriced-platform"
@@ -18,17 +18,17 @@ LATEST_LINK="$BASE_DIR/builds/$REPO/latest"
 # Create necessary directories
 mkdir -p "$LOG_DIR" "$BUILD_DIR"
 
-echo "🚀 Starting build for [$REPO] on branch [$BRANCH]..."
+echo "Starting build for [$REPO] on branch [$BRANCH]..."
 
 # --- Git Operations ---
 cd "$REPO_DIR"
-echo "🔄 Fetching branch [$BRANCH] from origin..."
+echo " Fetching branch [$BRANCH] from origin..."
 git fetch origin "$BRANCH"
 git checkout "$BRANCH"
 git reset --hard "origin/$BRANCH"
 
 # --- Maven Build per Module ---
-echo "🔧 Running Maven build for specified modules..."
+echo " Running Maven build for specified modules..."
 
 # Declare an associative array to map repos to their modules
 declare -A ARTIFACTS=(
@@ -50,29 +50,29 @@ for module in "${MODULES[@]}"; do
 done
 
 # --- Artifact Copying ---
-echo "📦 Copying build artifacts..."
+echo " Copying build artifacts..."
 # This part remains the same, it iterates through the modules again
 # and copies the final JAR files to the build directory.
 
 for module in "${MODULES[@]}"; do
   MOD_PATH="$REPO_DIR/$module/target"
   if [[ ! -d "$MOD_PATH" ]]; then
-    echo "⚠️ Target folder missing for module [$module], skipping..."
+    echo "Target folder missing for module [$module], skipping..."
     continue
   fi
 
-  echo "📦 Copying artifact for $module from [$MOD_PATH]..."
+  echo " Copying artifact for $module from [$MOD_PATH]..."
   JAR_FILES=$(find "$MOD_PATH" -maxdepth 1 -type f -name "*.jar" \
     ! -name "*original*" ! -name "*sources*" ! -name "*javadoc*" \
     | sort)
 
   if [[ -z "$JAR_FILES" ]]; then
-    echo "⚠️ No valid JAR found in [$MOD_PATH]"
+    echo "No valid JAR found in [$MOD_PATH]"
   else
     while IFS= read -r jar; do
       # cp command no longer uses the -p flag to update timestamp
       cp "$jar" "$BUILD_DIR/"
-      echo "✅ Copied: $(basename "$jar")"
+      echo "Copied: $(basename "$jar")"
     done <<< "$JAR_FILES"
   fi
 done
@@ -80,5 +80,5 @@ done
 # --- Final Steps ---
 # Create a symbolic link to the latest build directory
 ln -sfn "$BUILD_DIR" "$LATEST_LINK"
-echo "✅ Build complete for [$REPO] on branch [$BRANCH]"
-echo "🗂️ Artifacts: $BUILD_DIR"
+echo "Build complete for [$REPO] on branch [$BRANCH]"
+echo "Artifacts: $BUILD_DIR"
