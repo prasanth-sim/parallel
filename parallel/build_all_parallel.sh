@@ -521,7 +521,11 @@ CPU_CORES=$(nproc)
 # Calculate max jobs = 80% of available cores (rounded up)
 MAX_JOBS=$(( (CPU_CORES * 80 + 99) / 100 ))
 
+<<<<<<< HEAD
 echo -e "\n Running ${#COMMANDS[@]} builds in parallel, limited to ~80% of CPU capacity..."
+=======
+echo -e "\n🚀 Running ${#COMMANDS[@]} builds in parallel, limited to ~80% of CPU capacity..."
+>>>>>>> 9ddfce9 (all)
 
 if [ ${#COMMANDS[@]} -eq 0 ]; then
     echo "No parallel commands to execute. Exiting."
