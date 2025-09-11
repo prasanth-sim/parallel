@@ -1,14 +1,10 @@
 #!/bin/bash
-
 # Exit immediately if a command exits with a non-zero status.
 set -Eeuo pipefail
-
 # Trap a command that fails and print an error message.
 trap 'echo "[ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
-
 # Define the configuration file path.
 CONFIG_FILE="$HOME/.repo_builder_config"
-
 # === Function to save configuration ===
 # Saves the current state of user inputs to a configuration file.
 save_config() {
@@ -19,6 +15,7 @@ save_config() {
         echo "SELECTED_REPOS=${SELECTED[*]}"
         echo "UI_ENV=$UI_ENV"
         echo "UI_BRANCH=$UI_BRANCH"
+        echo "UI_URL_SEPARATOR=$UI_URL_SEPARATOR"
         echo "CLIENT_PRICING_BRANCH=$CLIENT_PRICING_BRANCH"
         echo "BACKEND_DEP_BRANCH=$BACKEND_DEP_BRANCH"
         # Iterate through the associative array of other repo branches.
@@ -30,7 +27,6 @@ save_config() {
     } > "$CONFIG_FILE" # Redirect all echoes to the config file.
     echo "Configuration saved."
 }
-
 # === Function to load configuration ===
 # Loads previous user inputs from the configuration file, if it exists.
 load_config() {
@@ -39,10 +35,10 @@ load_config() {
     declare -g SELECTED=() # Array for selected repo numbers.
     declare -g UI_ENV=""
     declare -g UI_BRANCH=""
+    declare -g UI_URL_SEPARATOR="."
     declare -g CLIENT_PRICING_BRANCH=""
     declare -g BACKEND_DEP_BRANCH=""
     declare -gA BRANCH_CHOICES # Associative array for other repo branches.
-
     if [[ -f "$CONFIG_FILE" ]]; then
         echo "Loading previous inputs from $CONFIG_FILE..."
         while IFS='=' read -r key value; do # Read file line by line, splitting by '='.
@@ -51,6 +47,7 @@ load_config() {
                 SELECTED_REPOS) IFS=' ' read -r -a SELECTED <<< "$value" ;; # Read space-separated values into array.
                 UI_ENV) UI_ENV="$value" ;;
                 UI_BRANCH) UI_BRANCH="$value" ;;
+                UI_URL_SEPARATOR) UI_URL_SEPARATOR="$value" ;;
                 CLIENT_PRICING_BRANCH) CLIENT_PRICING_BRANCH="$value" ;;
                 BACKEND_DEP_BRANCH) BACKEND_DEP_BRANCH="$value" ;;
                 BRANCH_*)
@@ -63,17 +60,13 @@ load_config() {
         done < "$CONFIG_FILE"
     fi
 }
-
 # === Load previous configuration at script start ===
 load_config
-
 # Record the script start time for the build summary.
 START_TIME=$(date +"%Y-%m-%d %H:%M:%S")
-
 # Determine the directory where this script is located.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIRED_SETUP_SCRIPT="$SCRIPT_DIR/required-setup.sh"
-
 # --- Prompt to run required-setup.sh ---
 if [[ -f "$REQUIRED_SETUP_SCRIPT" ]]; then
     read -rp "Do you want to run '$REQUIRED_SETUP_SCRIPT' to ensure all tools are set up? (y/N): " RUN_SETUP
@@ -87,23 +80,19 @@ if [[ -f "$REQUIRED_SETUP_SCRIPT" ]]; then
 else
     echo "Warning: required-setup.sh not found at $REQUIRED_SETUP_SCRIPT. Please ensure all necessary tools are installed manually."
 fi
-
 # === Prompt for Base Directory ===
 DEFAULT_BASE_INPUT="${BASE_INPUT:-"automation_workspace"}" # Use loaded BASE_INPUT as default.
 read -rp "Enter base directory for cloning/building/logs (relative to ~) [default: $DEFAULT_BASE_INPUT]: " USER_BASE_INPUT
 BASE_INPUT="${USER_BASE_INPUT:-$DEFAULT_BASE_INPUT}" # Use user input, or the default if empty.
 BASE_DIR="$HOME/$BASE_INPUT" # Construct the full absolute path.
 DATE_TAG=$(date +"%Y%m%d_%H%M%S") # Timestamp for unique build and log directories.
-
 # === Paths Based on User Input ===
 CLONE_DIR="$BASE_DIR/repos"
 DEPLOY_DIR="$BASE_DIR/builds"
 LOG_DIR="$BASE_DIR/automationlogs"
 TRACKER_FILE="$LOG_DIR/build-tracker-${DATE_TAG}.csv" # File to track build success/failure.
-
 # Create necessary directories if they don't exist.
 mkdir -p "$CLONE_DIR" "$DEPLOY_DIR" "$LOG_DIR"
-
 # === Repo Configurations ===
 declare -A REPO_URLS=(
     ["spriced-ui"]="https://github.com/simaiserver/spriced-ui.git"
@@ -114,7 +103,6 @@ declare -A REPO_URLS=(
     ["spriced-platform"]="https://github.com/simaiserver/spriced-platform.git"
     ["nrp-cummins-outbound"]="https://github.com/simaiserver/nrp-cummins-outbound.git"
 )
-
 declare -A DEFAULT_BRANCHES=(
     ["spriced-ui"]="main"
     ["spriced-backend"]="main"
@@ -124,7 +112,6 @@ declare -A DEFAULT_BRANCHES=(
     ["spriced-platform"]="main"
     ["nrp-cummins-outbound"]="develop"
 )
-
 REPOS=(
     "spriced-backend"
     "spriced-platform"
@@ -134,7 +121,6 @@ REPOS=(
     "Stocking-Segmentation-Enhancement"
     "spriced-client-cummins-parts-pricing"
 )
-
 BUILD_SCRIPTS=(
     "$SCRIPT_DIR/build_spriced_backend.sh"
     "$SCRIPT_DIR/build_spriced_platform.sh"
@@ -144,28 +130,23 @@ BUILD_SCRIPTS=(
     "$SCRIPT_DIR/build_stocking_segmentation_enhancement.sh"
     "$SCRIPT_DIR/build_spriced_client_cummins_parts_pricing.sh"
 )
-
 # === Display Repo Selection Menu ===
 echo -e "\n Available Repositories:"
 for i in "${!REPOS[@]}"; do
     printf "  %d) %s\n" "$((i+1))" "${REPOS[$i]}"
 done
 echo "  0) ALL"
-
 # Use previously selected repos as default, or '0' (ALL) if no previous selection.
 DEFAULT_SELECTED_PROMPT="${SELECTED[*]:-0}"
 read -rp $'\n Enter repo numbers to build (space-separated or 0 for all) [default: '"$DEFAULT_SELECTED_PROMPT"']: ' -a USER_SELECTED_INPUT
-
 # If user provided input, use it. Otherwise, stick with the loaded 'SELECTED' array.
 if [[ -n "${USER_SELECTED_INPUT[*]}" ]]; then
     SELECTED=("${USER_SELECTED_INPUT[@]}")
 fi
-
 # Handle '0' or 'all' input to select all repositories.
 if [[ "${SELECTED[0]}" == "0" || "${SELECTED[0],,}" == "all" ]]; then
     SELECTED=($(seq 1 ${#REPOS[@]}))
 fi
-
 # Helper function to build a single repo and log its output.
 # This function is exported so it can be used by GNU Parallel in subshells.
 build_and_log_repo() {
@@ -175,13 +156,10 @@ build_and_log_repo() {
     local tracker_file="$4"
     local base_dir_for_build_script="$5"
     shift 5 # Shift arguments to allow passing remaining arguments to the build script.
-
     local script_output
     local script_exit_code
-
     # Add start timestamp to the log file.
     echo "$(date +'%Y-%m-%d %H:%M:%S') --- Build started for $repo_name ---" >> "${log_file}"
-
     # Execute the specific build script and capture its output and exit status.
     set +e
     if script_output=$("${script_path}" "$@" "$base_dir_for_build_script" 2>&1); then
@@ -190,24 +168,20 @@ build_and_log_repo() {
         script_exit_code=$?
     fi
     set -e
-
     # Append timestamped output to the log file.
     echo "$script_output" | while IFS= read -r line; do
         echo "$(date +'%Y-%m-%d %H:%M:%S') $line"
     done >> "${log_file}"
-
     # Record success or failure in the tracker file based on the script's exit code.
     local status="FAIL"
     if [[ "$script_exit_code" -eq 0 ]]; then
         status="SUCCESS"
     fi
     echo "${repo_name},${status},${log_file}" >> "${tracker_file}"
-
     # Add end timestamp and final status to the log file.
     echo "$(date +'%Y-%m-%d %H:%M:%S') --- Build finished for $repo_name with status: $status ---" >> "${log_file}"
 }
 export -f build_and_log_repo # Export the function for parallel execution.
-
 # Track which repos are selected to avoid duplicate processing.
 declare -A SELECTED_REPOS_MAP
 for idx_str in "${SELECTED[@]}"; do
@@ -219,12 +193,10 @@ for idx_str in "${SELECTED[@]}"; do
     i=$((idx - 1))
     SELECTED_REPOS_MAP["${REPOS[$i]}"]=1
 done
-
 # --- Phase 1: Git Operations and User Input Collection ---
 # This loop performs git operations and collects all necessary branch/environment inputs upfront.
 # It does NOT start any builds yet.
 UI_BUILD_ENV_CHOSEN=""
-
 for repo_name_to_process in "${REPOS[@]}"; do
     if [[ -v SELECTED_REPOS_MAP["$repo_name_to_process"] ]]; then
         i=-1
@@ -234,19 +206,15 @@ for repo_name_to_process in "${REPOS[@]}"; do
                 break
             fi
         done
-
         if [[ "$i" -eq -1 ]]; then
             echo "Error: Could not find index for repo $repo_name_to_process. Skipping."
             unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue
         fi
-
         REPO="${REPOS[$i]}"
         SCRIPT_PATH_FOR_REPO="${BUILD_SCRIPTS[$i]}"
         REPO_DIR="$CLONE_DIR/$REPO"
         DEFAULT_REPO_BRANCH="${DEFAULT_BRANCHES[$REPO]}"
-
         echo -e "\nChecking '$REPO' repository..."
-
         if [[ -d "$REPO_DIR/.git" ]]; then
             echo "Updating existing repo at $REPO_DIR"
             (
@@ -267,7 +235,6 @@ for repo_name_to_process in "${REPOS[@]}"; do
             git clone "${REPO_URLS[$REPO]}" "$REPO_DIR" || { echo "Failed to clone $REPO. Skipping its build."; unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
             (cd "$REPO_DIR" || exit 1) || { echo "Failed to enter $REPO directory. Skipping its build."; unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
         fi
-
         # --- Collect user input for branch/environment ---
         if [[ "$REPO" == "spriced-ui" ]]; then
             PIPELINE_DIR="$BASE_DIR/spriced-pipeline"
@@ -280,25 +247,21 @@ for repo_name_to_process in "${REPOS[@]}"; do
                 echo "Cloning spriced-pipeline repo from $PIPELINE_URL into $PIPELINE_DIR."
                 git clone --quiet "$PIPELINE_URL" "$PIPELINE_DIR" || { echo "Failed to clone spriced-pipeline. Skipping spriced-ui build."; unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
             fi
-
             declare -a AVAILABLE_ENVS=()
             PIPELINE_FRONTEND_DIR="$PIPELINE_DIR/framework/frontend"
             if [ ! -d "$PIPELINE_FRONTEND_DIR" ]; then
                 echo "Directory not found: $PIPELINE_FRONTEND_DIR. Cannot determine environments."
                 unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue
             fi
-
             while IFS= read -r -d '' dir; do
                 env_name=$(basename "$dir" | sed 's/nrp-//')
                 AVAILABLE_ENVS+=("$env_name")
             done < <(find "$PIPELINE_FRONTEND_DIR" -maxdepth 1 -type d -name "nrp-*" -print0)
-
             echo -e "\nChoose environment for spriced-ui:"
             for env_idx in "${!AVAILABLE_ENVS[@]}"; do
                 printf "  %d) %s\n" "$((env_idx+1))" "${AVAILABLE_ENVS[$env_idx]}"
             done
             echo "  $((${#AVAILABLE_ENVS[@]} + 1))) Create New..."
-
             DEFAULT_ENV_CHOICE=1
             if [[ -n "$UI_ENV" ]]; then
                 for env_idx in "${!AVAILABLE_ENVS[@]}"; do
@@ -308,11 +271,9 @@ for repo_name_to_process in "${REPOS[@]}"; do
                     fi
                 done
             fi
-
             while true; do
                 read -rp "Enter environment number [default: $DEFAULT_ENV_CHOICE]: " ENV_NUM_INPUT
                 ENV_NUM_CHOICE="${ENV_NUM_INPUT:-$DEFAULT_ENV_CHOICE}"
-
                 if [[ "$ENV_NUM_CHOICE" =~ ^[0-9]+$ ]] && (( ENV_NUM_CHOICE == ${#AVAILABLE_ENVS[@]} + 1 )); then
                     read -rp "Enter new environment name (e.g., prasanth): " NEW_ENV_NAME
                     ENV_INPUT_COLLECTED="$NEW_ENV_NAME"
@@ -344,18 +305,20 @@ for repo_name_to_process in "${REPOS[@]}"; do
             done
             UI_ENV="$ENV_INPUT_COLLECTED"
             UI_BUILD_ENV_CHOSEN="$ENV_INPUT_COLLECTED"
-
             DEFAULT_UI_BRANCH="${UI_BRANCH:-$DEFAULT_REPO_BRANCH}"
             read -rp "Enter branch name for spriced-ui [default: $DEFAULT_UI_BRANCH]: " BRANCH_INPUT_COLLECTED
             BRANCH_INPUT_COLLECTED="${BRANCH_INPUT_COLLECTED:-$DEFAULT_UI_BRANCH}"
             UI_BRANCH="$BRANCH_INPUT_COLLECTED"
             BRANCH_CHOICES["$REPO"]="$BRANCH_INPUT_COLLECTED"
-
+            # --- New prompt for URL separator ---
+            DEFAULT_SEPARATOR="${UI_URL_SEPARATOR:-.}"
+            read -rp "Choose URL separator for spriced-ui ('-' for hyphen, '.' for dot) [default: $DEFAULT_SEPARATOR]: " SEPARATOR_INPUT
+            UI_URL_SEPARATOR="${SEPARATOR_INPUT:-$DEFAULT_SEPARATOR}"
+            # --- End new prompt ---
             BACKUP_DIR="/tmp/spriced_ui_backup_$DATE_TAG"
             mkdir -p "$BACKUP_DIR"
             find "$REPO_DIR/apps/" -maxdepth 2 -type f -name ".env" -exec mv {} "$BACKUP_DIR" \; 2>/dev/null || true
             mv "$REPO_DIR/package-lock.json" "$BACKUP_DIR/" 2>/dev/null || true
-
             (
                 cd "$REPO_DIR" || exit 1
                 git fetch origin
@@ -371,7 +334,6 @@ for repo_name_to_process in "${REPOS[@]}"; do
             find "$BACKUP_DIR" -maxdepth 1 -type f -name ".env" -exec cp {} "$REPO_DIR/apps/" \; 2>/dev/null || true
             cp "$BACKUP_DIR/package-lock.json" "$REPO_DIR/" 2>/dev/null || true
             rm -rf "$BACKUP_DIR"
-
         # --- Special handling for 'spriced-client-cummins-parts-pricing' ---
         elif [[ "$REPO" == "spriced-client-cummins-parts-pricing" ]]; then
             DEFAULT_CLIENT_BRANCH="${CLIENT_PRICING_BRANCH:-$DEFAULT_REPO_BRANCH}"
@@ -379,14 +341,12 @@ for repo_name_to_process in "${REPOS[@]}"; do
             CLIENT_BRANCH_INPUT_COLLECTED="${CLIENT_BRANCH_INPUT_COLLECTED:-$DEFAULT_CLIENT_BRANCH}"
             CLIENT_PRICING_BRANCH="$CLIENT_BRANCH_INPUT_COLLECTED"
             BRANCH_CHOICES["$REPO"]="$CLIENT_BRANCH_INPUT_COLLECTED"
-
             BACKEND_REPO_DIR="$CLONE_DIR/spriced-backend"
             while true; do
                 DEFAULT_BACKEND_BRANCH_DEP="${BACKEND_DEP_BRANCH:-${DEFAULT_BRANCHES['spriced-backend']}}"
                 read -rp "Enter branch for spriced-backend (dependency) [default: $DEFAULT_BACKEND_BRANCH_DEP]: " BACKEND_BRANCH_INPUT_COLLECTED
                 BACKEND_BRANCH_INPUT_COLLECTED="${BACKEND_BRANCH_INPUT_COLLECTED:-$DEFAULT_BACKEND_BRANCH_DEP}"
                 BACKEND_DEP_BRANCH="$BACKEND_BRANCH_INPUT_COLLECTED"
-
                 if [ -d "$BACKEND_REPO_DIR/.git" ]; then
                     if (cd "$BACKEND_REPO_DIR" && git fetch origin > /dev/null 2>&1 && git rev-parse --verify "origin/$BACKEND_BRANCH_INPUT_COLLECTED" >/dev/null 2>&1); then
                         break
@@ -398,7 +358,6 @@ for repo_name_to_process in "${REPOS[@]}"; do
                     break
                 fi
             done
-
             (
                 cd "$REPO_DIR" || exit 1
                 git fetch origin
@@ -410,14 +369,12 @@ for repo_name_to_process in "${REPOS[@]}"; do
                     exit 1
                 fi
             ) || { unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
-
         # --- Generic handling for all other repositories ---
         else
             DEFAULT_GENERIC_BRANCH="${BRANCH_CHOICES[$REPO]:-$DEFAULT_REPO_BRANCH}"
             read -rp "Enter branch for ${REPO} [default: $DEFAULT_GENERIC_BRANCH]: " BRANCH_INPUT_COLLECTED
             BRANCH_INPUT_COLLECTED="${BRANCH_INPUT_COLLECTED:-$DEFAULT_GENERIC_BRANCH}"
             BRANCH_CHOICES["$REPO"]="$BRANCH_INPUT_COLLECTED"
-
             (
                 cd "$REPO_DIR" || exit 1
                 git fetch origin
@@ -432,20 +389,16 @@ for repo_name_to_process in "${REPOS[@]}"; do
         fi
     fi
 done
-
 # === Save configuration for next run ===
 save_config
-
 # --- Phase 2: Sequential Build of 'spriced-backend' (if selected and prepared) ---
 if [[ -v SELECTED_REPOS_MAP["spriced-backend"] ]]; then
     REPO="spriced-backend"
     SCRIPT="$SCRIPT_DIR/build_spriced_backend.sh"
     LOG_FILE="$LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
     BRANCH="${BRANCH_CHOICES[$REPO]}"
-
     echo -e "\nBuilding $REPO sequentially..."
     echo "$(date +'%Y-%m-%d %H:%M:%S') --- Build started for $REPO ---" >> "${LOG_FILE}"
-
     set +e
     if "$SCRIPT" "$BRANCH" "$BASE_DIR" 2>&1 | while IFS= read -r line; do
         echo "$(date +'%Y-%m-%d %H:%M:%S') $line"
@@ -455,11 +408,8 @@ if [[ -v SELECTED_REPOS_MAP["spriced-backend"] ]]; then
         BACKEND_BUILD_STATUS="FAIL"
     fi
     set -e
-
     echo "${REPO},${BACKEND_BUILD_STATUS},${LOG_FILE}" >> "${TRACKER_FILE}"
-
     echo "$(date +'%Y-%m-%d %H:%M:%S') --- Build finished for $REPO with status: $BACKEND_BUILD_STATUS ---" >> "${LOG_FILE}"
-
     if [[ "$BACKEND_BUILD_STATUS" == "FAIL" ]]; then
         echo "spriced-backend build failed. Dependent projects will be skipped."
         exit 1
@@ -467,10 +417,8 @@ if [[ -v SELECTED_REPOS_MAP["spriced-backend"] ]]; then
     echo "spriced-backend build completed successfully."
     unset SELECTED_REPOS_MAP["spriced-backend"]
 fi
-
 # --- Phase 3: Prepare Parallel Commands for Remaining Repos ---
 COMMANDS=()
-
 for repo_name in "${!SELECTED_REPOS_MAP[@]}"; do
     i=-1
     for j in "${!REPOS[@]}"; do
@@ -479,20 +427,18 @@ for repo_name in "${!SELECTED_REPOS_MAP[@]}"; do
             break
         fi
     done
-
     if [[ "$i" -eq -1 ]]; then
         echo "Error: Could not find index for repo $repo_name. Skipping."
         continue
     fi
-
     REPO="${REPOS[$i]}"
     SCRIPT="${BUILD_SCRIPTS[$i]}"
     LOG_FILE="$LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
-
     if [[ "$REPO" == "spriced-ui" ]]; then
         BRANCH="${UI_BRANCH}"
         ENV_ARG="${UI_BUILD_ENV_CHOSEN}"
-        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"$ENV_ARG\" \"$BRANCH\"")
+        SEPARATOR_ARG="${UI_URL_SEPARATOR}"
+        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"$ENV_ARG\" \"$BRANCH\" \"$SEPARATOR_ARG\"")
     elif [[ "$REPO" == "spriced-client-cummins-parts-pricing" ]]; then
         CLIENT_BRANCH="${CLIENT_PRICING_BRANCH}"
         BACKEND_BRANCH_ARG="${BACKEND_DEP_BRANCH}"
@@ -502,28 +448,22 @@ for repo_name in "${!SELECTED_REPOS_MAP[@]}"; do
         COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"${BRANCH}\"")
     fi
 done
-
 # --- Phase 4: Parallel execution ---
 CPU_CORES=$(nproc)
 MAX_JOBS=$(( (CPU_CORES * 80 + 99) / 100 ))
-
 echo -e "\n🚀 Running ${#COMMANDS[@]} builds in parallel, limited to ~80% of CPU capacity..."
-
 if [ ${#COMMANDS[@]} -eq 0 ]; then
     echo "No parallel commands to execute. Exiting."
     exit 0
 fi
-
 set +e
 printf "%s\n" "${COMMANDS[@]}" | parallel -j "$MAX_JOBS" --load 80% --no-notice --bar
 PARALLEL_EXIT_CODE=$?
 set -e
 END_TIME=$(date +"%Y-%m-%d %H:%M:%S")
-
 # --- Phase 5: Summary Output ---
 echo -e "\n Build Summary:\n"
 SUMMARY_CSV_FILE="$LOG_DIR/build-summary-${DATE_TAG}.csv"
-
 if [[ -f "$TRACKER_FILE" ]]; then
     echo "Script Start Time,$START_TIME" > "$SUMMARY_CSV_FILE"
     echo "Script End Time,$END_TIME" >> "$SUMMARY_CSV_FILE"
@@ -541,8 +481,6 @@ else
     echo "Build tracker not found: $TRACKER_FILE"
     echo "Script execution was likely interrupted. No summary was generated."
 fi
-
 echo "Detailed build summary also available at: $SUMMARY_CSV_FILE"
 echo -e "\n Script execution complete."
-
 exit $PARALLEL_EXIT_CODE
