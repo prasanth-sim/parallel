@@ -1,63 +1,57 @@
 #!/bin/bash
 # Exit immediately if a command exits with a non-zero status.
 set -Eeuo pipefail
-
 # Trap a command that fails and print an error message.
 trap 'echo "[ERROR] Line $LINENO: $BASH_COMMAND (exit $?)"' ERR
 
-# Define the configuration file path.
 CONFIG_FILE="$HOME/.repo_builder_config"
 
-# === Function to save configuration ===
-# Saves the current state of user inputs to a configuration file.
+# --- GLOBAL VARIABLES ---
+declare -g BASE_INPUT=""
+declare -g SELECTED=()
+declare -g UI_ENV=""
+declare -g UI_BRANCH=""
+declare -g UI_URL_SEPARATOR="."
+declare -g CLIENT_PRICING_BRANCH=""
+declare -g BACKEND_DEP_BRANCH=""
+declare -g EXCEL_ADDIN_ENV=""
+declare -gA BRANCH_CHOICES
+
 save_config() {
     echo "Saving current configuration to $CONFIG_FILE..."
     {
         echo "BASE_INPUT=$BASE_INPUT"
-        # Join array elements with spaces for easy saving.
         echo "SELECTED_REPOS=${SELECTED[*]}"
         echo "UI_ENV=$UI_ENV"
         echo "UI_BRANCH=$UI_BRANCH"
         echo "UI_URL_SEPARATOR=$UI_URL_SEPARATOR"
         echo "CLIENT_PRICING_BRANCH=$CLIENT_PRICING_BRANCH"
         echo "BACKEND_DEP_BRANCH=$BACKEND_DEP_BRANCH"
-        # Iterate through the associative array of other repo branches.
+        echo "EXCEL_ADDIN_ENV=$EXCEL_ADDIN_ENV"
         for repo in "${!BRANCH_CHOICES[@]}"; do
-            # Convert hyphens to underscores for variable name in the config file.
             local var_name="BRANCH_${repo//-/_}"
             echo "$var_name=${BRANCH_CHOICES[$repo]}"
         done
-    } > "$CONFIG_FILE" # Redirect all echoes to the config file.
+    } > "$CONFIG_FILE"
     echo "Configuration saved."
 }
 
-# === Function to load configuration ===
-# Loads previous user inputs from the configuration file, if it exists.
 load_config() {
-    # Declare global variables to make them accessible throughout the script.
-    declare -g BASE_INPUT=""
-    declare -g SELECTED=() # Array for selected repo numbers.
-    declare -g UI_ENV=""
-    declare -g UI_BRANCH=""
-    declare -g UI_URL_SEPARATOR="."
-    declare -g CLIENT_PRICING_BRANCH=""
-    declare -g BACKEND_DEP_BRANCH=""
-    declare -gA BRANCH_CHOICES # Associative array for other repo branches.
     if [[ -f "$CONFIG_FILE" ]]; then
         echo "Loading previous inputs from $CONFIG_FILE..."
-        while IFS='=' read -r key value; do # Read file line by line, splitting by '='.
+        while IFS='=' read -r key value; do
             case "$key" in
                 BASE_INPUT) BASE_INPUT="$value" ;;
-                SELECTED_REPOS) IFS=' ' read -r -a SELECTED <<< "$value" ;; # Read space-separated values into array.
+                SELECTED_REPOS) IFS=' ' read -r -a SELECTED <<< "$value" ;;
                 UI_ENV) UI_ENV="$value" ;;
                 UI_BRANCH) UI_BRANCH="$value" ;;
                 UI_URL_SEPARATOR) UI_URL_SEPARATOR="$value" ;;
                 CLIENT_PRICING_BRANCH) CLIENT_PRICING_BRANCH="$value" ;;
                 BACKEND_DEP_BRANCH) BACKEND_DEP_BRANCH="$value" ;;
+                EXCEL_ADDIN_ENV) EXCEL_ADDIN_ENV="$value" ;;
                 BRANCH_*)
-                    # Extract original repo name by removing "BRANCH_" prefix and converting underscores back to hyphens.
                     local repo_key="${key#BRANCH_}"
-                    local repo_name="${repo_key//_/'-'}"
+                    local repo_name="${repo_key//_/-}"
                     BRANCH_CHOICES["$repo_name"]="$value"
                     ;;
             esac
@@ -65,22 +59,73 @@ load_config() {
     fi
 }
 
-# === Load previous configuration at script start ===
+prepare_repo() {
+    local repo_name="$1"
+    local repo_dir="$2"
+    local branch_to_checkout="$3"
+    local repo_url="${REPO_URLS[$repo_name]}"
+    echo "Checking '$repo_name' repository..."
+    if [[ -d "$repo_dir/.git" ]]; then
+        echo "Updating existing repo at $repo_dir"
+        (
+            cd "$repo_dir" || exit 1
+            git fetch origin --prune
+            git reset --hard HEAD
+            git clean -fd
+            if git rev-parse --verify "origin/$branch_to_checkout" >/dev/null 2>&1; then
+                git checkout -B "$branch_to_checkout" "origin/$branch_to_checkout"
+            else
+                echo "Remote branch origin/$branch_to_checkout not found. Skipping '$repo_name'..."
+                exit 1
+            fi
+        ) || { echo "Failed to prepare $repo_name. Skipping its build."; return 1; }
+    else
+        echo "Cloning new repo from $repo_url into $repo_dir"
+        [[ -d "$repo_dir" && ! -d "$repo_dir/.git" ]] && rm -rf "$repo_dir"
+        git clone "$repo_url" "$repo_dir" || { echo "Failed to clone $repo_name. Skipping its build."; return 1; }
+        (cd "$repo_dir" && git checkout -B "$branch_to_checkout" "origin/$branch_to_checkout") || { echo "Failed to checkout branch in $repo_name. Skipping its build."; return 1; }
+    fi
+    return 0
+}
+
+build_and_log_repo() {
+    local repo_name="$1"
+    local script_path="$2"
+    local log_file="$3"
+    local tracker_file="$4"
+    local base_dir_for_build_script="$5"
+    shift 5
+    local script_output
+    local script_exit_code
+    echo "$(date +'%Y-%m-%d %H:%M:%S') --- Build started for $repo_name ---" >> "${log_file}"
+    set +e
+    if script_output=$("${script_path}" "$@" "$base_dir_for_build_script" 2>&1); then
+        script_exit_code=0
+    else
+        script_exit_code=$?
+    fi
+    set -e
+    echo "$script_output" | while IFS= read -r line; do
+        echo "$(date +'%Y-%m-%d %H:%M:%S') $line"
+    done >> "${log_file}"
+    local status="FAIL"
+    if [[ "$script_exit_code" -eq 0 ]]; then
+        status="SUCCESS"
+    fi
+    echo "${repo_name},${status},${log_file}" >> "${tracker_file}"
+    echo "$(date +'%Y-%m-%d %H:%M:%S') --- Build finished for $repo_name with status: $status ---" >> "${log_file}"
+}
+export -f build_and_log_repo
+
 load_config
-
-# Record the script start time for the build summary.
 START_TIME=$(date +"%Y-%m-%d %H:%M:%S")
-
-# Determine the directory where this script is located.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQUIRED_SETUP_SCRIPT="$SCRIPT_DIR/required-setup.sh"
-
-# --- Prompt to run required-setup.sh ---
 if [[ -f "$REQUIRED_SETUP_SCRIPT" ]]; then
     read -rp "Do you want to run '$REQUIRED_SETUP_SCRIPT' to ensure all tools are set up? (y/N): " RUN_SETUP
-    if [[ "${RUN_SETUP,,}" == "y" ]]; then # Convert input to lowercase for comparison.
+    if [[ "${RUN_SETUP,,}" == "y" ]]; then
         echo "Running $REQUIRED_SETUP_SCRIPT..."
-        "$REQUIRED_SETUP_SCRIPT" # Execute the setup script.
+        "$REQUIRED_SETUP_SCRIPT"
         echo "required-setup.sh completed."
     else
         echo "Skipping required-setup.sh. Please ensure your environment is set up correctly."
@@ -89,23 +134,17 @@ else
     echo "Warning: required-setup.sh not found at $REQUIRED_SETUP_SCRIPT. Please ensure all necessary tools are installed manually."
 fi
 
-# === Prompt for Base Directory ===
-DEFAULT_BASE_INPUT="${BASE_INPUT:-"prasanthreddy"}" # Use loaded BASE_INPUT as default.
+DEFAULT_BASE_INPUT="${BASE_INPUT:-"automation_worklogs"}"
 read -rp "Enter base directory for cloning/building/logs (relative to ~) [default: $DEFAULT_BASE_INPUT]: " USER_BASE_INPUT
-BASE_INPUT="${USER_BASE_INPUT:-$DEFAULT_BASE_INPUT}" # Use user input, or the default if empty.
-BASE_DIR="$HOME/$BASE_INPUT" # Construct the full absolute path.
-DATE_TAG=$(date +"%Y%m%d_%H%M%S") # Timestamp for unique build and log directories.
-
-# === Paths Based on User Input ===
+BASE_INPUT="${USER_BASE_INPUT:-$DEFAULT_BASE_INPUT}"
+BASE_DIR="$HOME/$BASE_INPUT"
+DATE_TAG=$(date +"%Y%m%d_%H%M%S")
 CLONE_DIR="$BASE_DIR/repos"
 DEPLOY_DIR="$BASE_DIR/builds"
 LOG_DIR="$BASE_DIR/automationlogs"
-TRACKER_FILE="$LOG_DIR/build-tracker-${DATE_TAG}.csv" # File to track build success/failure.
-
-# Create necessary directories if they don't exist.
+TRACKER_FILE="$LOG_DIR/build-tracker-${DATE_TAG}.csv"
 mkdir -p "$CLONE_DIR" "$DEPLOY_DIR" "$LOG_DIR"
 
-# === Repo Configurations ===
 declare -A REPO_URLS=(
     ["spriced-ui"]="https://github.com/simaiserver/spriced-ui.git"
     ["spriced-backend"]="https://github.com/simaiserver/spriced-backend.git"
@@ -114,8 +153,8 @@ declare -A REPO_URLS=(
     ["Stocking-Segmentation-Enhancement"]="https://github.com/simaiserver/Stocking-Segmentation-Enhancement.git"
     ["spriced-platform"]="https://github.com/simaiserver/spriced-platform.git"
     ["nrp-cummins-outbound"]="https://github.com/simaiserver/nrp-cummins-outbound.git"
+    ["spriced-excel-add-in"]="https://github.com/simaiserver/spriced-excel-add-in.git"
 )
-
 declare -A DEFAULT_BRANCHES=(
     ["spriced-ui"]="main"
     ["spriced-backend"]="main"
@@ -124,7 +163,11 @@ declare -A DEFAULT_BRANCHES=(
     ["Stocking-Segmentation-Enhancement"]="main"
     ["spriced-platform"]="main"
     ["nrp-cummins-outbound"]="develop"
+    ["spriced-excel-add-in"]="develop"
 )
+export -A REPO_URLS
+export -A DEFAULT_BRANCHES
+export -A BRANCH_CHOICES
 
 REPOS=(
     "spriced-backend"
@@ -134,6 +177,7 @@ REPOS=(
     "spriced-client-cummins-data-ingestion"
     "Stocking-Segmentation-Enhancement"
     "spriced-client-cummins-parts-pricing"
+    "spriced-excel-add-in"
 )
 
 BUILD_SCRIPTS=(
@@ -144,71 +188,21 @@ BUILD_SCRIPTS=(
     "$SCRIPT_DIR/build_spriced_client_cummins_data_ingestion.sh"
     "$SCRIPT_DIR/build_stocking_segmentation_enhancement.sh"
     "$SCRIPT_DIR/build_spriced_client_cummins_parts_pricing.sh"
+    "$SCRIPT_DIR/build_spriced_excel_add_in.sh"
 )
-
-# === Display Repo Selection Menu ===
 echo -e "\n Available Repositories:"
 for i in "${!REPOS[@]}"; do
     printf "  %d) %s\n" "$((i+1))" "${REPOS[$i]}"
 done
 echo "  0) ALL"
-
-# Use previously selected repos as default, or '0' (ALL) if no previous selection.
-DEFAULT_SELECTED_PROMPT="${SELECTED[*]:-4}"
+DEFAULT_SELECTED_PROMPT="${SELECTED[*]:-8}"
 read -rp $'\n Enter repo numbers to build (space-separated or 0 for all) [default: '"$DEFAULT_SELECTED_PROMPT"']: ' -a USER_SELECTED_INPUT
-
-# If user provided input, use it. Otherwise, stick with the loaded 'SELECTED' array.
 if [[ -n "${USER_SELECTED_INPUT[*]}" ]]; then
     SELECTED=("${USER_SELECTED_INPUT[@]}")
 fi
-
-# Handle '0' or 'all' input to select all repositories.
 if [[ "${SELECTED[0]}" == "0" || "${SELECTED[0],,}" == "all" ]]; then
     SELECTED=($(seq 1 ${#REPOS[@]}))
 fi
-
-# Helper function to build a single repo and log its output.
-# This function is exported so it can be used by GNU Parallel in subshells.
-build_and_log_repo() {
-    local repo_name="$1"
-    local script_path="$2"
-    local log_file="$3"
-    local tracker_file="$4"
-    local base_dir_for_build_script="$5"
-    shift 5 # Shift arguments to allow passing remaining arguments to the build script.
-    local script_output
-    local script_exit_code
-
-    # Add start timestamp to the log file.
-    echo "$(date +'%Y-%m-%d %H:%M:%S') --- Build started for $repo_name ---" >> "${log_file}"
-
-    # Execute the specific build script and capture its output and exit status.
-    set +e
-    if script_output=$("${script_path}" "$@" "$base_dir_for_build_script" 2>&1); then
-        script_exit_code=0
-    else
-        script_exit_code=$?
-    fi
-    set -e
-
-    # Append timestamped output to the log file.
-    echo "$script_output" | while IFS= read -r line; do
-        echo "$(date +'%Y-%m-%d %H:%M:%S') $line"
-    done >> "${log_file}"
-
-    # Record success or failure in the tracker file based on the script's exit code.
-    local status="FAIL"
-    if [[ "$script_exit_code" -eq 0 ]]; then
-        status="SUCCESS"
-    fi
-    echo "${repo_name},${status},${log_file}" >> "${tracker_file}"
-
-    # Add end timestamp and final status to the log file.
-    echo "$(date +'%Y-%m-%d %H:%M:%S') --- Build finished for $repo_name with status: $status ---" >> "${log_file}"
-}
-export -f build_and_log_repo # Export the function for parallel execution.
-
-# Track which repos are selected to avoid duplicate processing.
 declare -A SELECTED_REPOS_MAP
 for idx_str in "${SELECTED[@]}"; do
     idx="$idx_str"
@@ -220,9 +214,6 @@ for idx_str in "${SELECTED[@]}"; do
     SELECTED_REPOS_MAP["${REPOS[$i]}"]=1
 done
 
-# --- Phase 1: Git Operations and User Input Collection ---
-# This loop performs git operations and collects all necessary branch/environment inputs upfront.
-# It does NOT start any builds yet.
 UI_BUILD_ENV_CHOSEN=""
 for repo_name_to_process in "${REPOS[@]}"; do
     if [[ -v SELECTED_REPOS_MAP["$repo_name_to_process"] ]]; then
@@ -429,6 +420,52 @@ for repo_name_to_process in "${REPOS[@]}"; do
                     exit 1
                 fi
             ) || { unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
+        # --- Special handling for 'spriced-excel-add-in' ---
+        elif [[ "$REPO" == "spriced-excel-add-in" ]]; then
+            DEFAULT_EXCEL_BRANCH="${BRANCH_CHOICES[$REPO]:-$DEFAULT_REPO_BRANCH}"
+            read -rp "Enter branch for ${REPO} [default: $DEFAULT_EXCEL_BRANCH]: " EXCEL_BRANCH_INPUT_COLLECTED
+            EXCEL_BRANCH_INPUT_COLLECTED="${EXCEL_BRANCH_INPUT_COLLECTED:-$DEFAULT_EXCEL_BRANCH}"
+            BRANCH_CHOICES["$REPO"]="$EXCEL_BRANCH_INPUT_COLLECTED"
+            
+            (
+                cd "$REPO_DIR" || exit 1
+                git fetch origin
+                if git rev-parse --verify origin/"$EXCEL_BRANCH_INPUT_COLLECTED" >/dev/null 2>&1; then
+                    echo "Switching to branch: $EXCEL_BRANCH_INPUT_COLLECTED"
+                    git checkout -B "$EXCEL_BRANCH_INPUT_COLLECTED" origin/"$EXCEL_BRANCH_INPUT_COLLECTED"
+                else
+                    echo "Branch '$EXCEL_BRANCH_INPUT_COLLECTED' not found on origin. Skipping '$REPO' build."
+                    exit 1
+                fi
+            ) || { unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
+
+            declare -a EXCEL_ENVS=("dev" "uat" "staging" "test" "qa" "prod")
+            echo -e "\nAvailable environments for spriced-excel-add-in:"
+            for env_idx in "${!EXCEL_ENVS[@]}"; do
+                printf "  %d) %s\n" "$((env_idx+1))" "${EXCEL_ENVS[$env_idx]}"
+            done
+
+            DEFAULT_ENV_CHOICE=1
+            if [[ -n "$EXCEL_ADDIN_ENV" ]]; then
+                for env_idx in "${!EXCEL_ENVS[@]}"; do
+                    if [[ "${EXCEL_ENVS[$env_idx]}" == "$EXCEL_ADDIN_ENV" ]]; then
+                        DEFAULT_ENV_CHOICE=$((env_idx+1))
+                        break
+                    fi
+                done
+            fi
+
+            while true; do
+                read -rp "Enter environment number [default: $DEFAULT_ENV_CHOICE]: " ENV_NUM_INPUT
+                ENV_NUM_CHOICE="${ENV_NUM_INPUT:-$DEFAULT_ENV_CHOICE}"
+
+                if [[ "$ENV_NUM_CHOICE" =~ ^[0-9]+$ ]] && (( ENV_NUM_CHOICE >= 1 && ENV_NUM_CHOICE <= ${#EXCEL_ENVS[@]} )); then
+                    EXCEL_ADDIN_ENV="${EXCEL_ENVS[$((ENV_NUM_CHOICE-1))]}"
+                    break
+                else
+                    echo "Invalid input. Please enter a valid number."
+                fi
+            done
         # --- Generic handling for all other repositories ---
         else
             DEFAULT_GENERIC_BRANCH="${BRANCH_CHOICES[$REPO]:-$DEFAULT_REPO_BRANCH}"
@@ -451,10 +488,8 @@ for repo_name_to_process in "${REPOS[@]}"; do
     fi
 done
 
-# === Save configuration for next run ===
 save_config
 
-# --- Phase 2: Sequential Build of 'spriced-backend' (if selected and prepared) ---
 if [[ -v SELECTED_REPOS_MAP["spriced-backend"] ]]; then
     REPO="spriced-backend"
     SCRIPT="$SCRIPT_DIR/build_spriced_backend.sh"
@@ -462,7 +497,6 @@ if [[ -v SELECTED_REPOS_MAP["spriced-backend"] ]]; then
     BRANCH="${BRANCH_CHOICES[$REPO]}"
     echo -e "\nBuilding $REPO sequentially..."
     echo "$(date +'%Y-%m-%d %H:%M:%S') --- Build started for $REPO ---" >> "${LOG_FILE}"
-
     set +e
     if "$SCRIPT" "$BRANCH" "$BASE_DIR" 2>&1 | while IFS= read -r line; do
         echo "$(date +'%Y-%m-%d %H:%M:%S') $line"
@@ -472,7 +506,6 @@ if [[ -v SELECTED_REPOS_MAP["spriced-backend"] ]]; then
         BACKEND_BUILD_STATUS="FAIL"
     fi
     set -e
-
     echo "${REPO},${BACKEND_BUILD_STATUS},${LOG_FILE}" >> "${TRACKER_FILE}"
     echo "$(date +'%Y-%m-%d %H:%M:%S') --- Build finished for $REPO with status: $BACKEND_BUILD_STATUS ---" >> "${LOG_FILE}"
     if [[ "$BACKEND_BUILD_STATUS" == "FAIL" ]]; then
@@ -483,7 +516,6 @@ if [[ -v SELECTED_REPOS_MAP["spriced-backend"] ]]; then
     unset SELECTED_REPOS_MAP["spriced-backend"]
 fi
 
-# --- Phase 3: Prepare Parallel Commands for Remaining Repos ---
 COMMANDS=()
 for repo_name in "${!SELECTED_REPOS_MAP[@]}"; do
     i=-1
@@ -493,35 +525,27 @@ for repo_name in "${!SELECTED_REPOS_MAP[@]}"; do
             break
         fi
     done
-
     if [[ "$i" -eq -1 ]]; then
         echo "Error: Could not find index for repo $repo_name. Skipping."
         continue
     fi
-
     REPO="${REPOS[$i]}"
     SCRIPT="${BUILD_SCRIPTS[$i]}"
     LOG_FILE="$LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
-
+    current_repo_branch="${BRANCH_CHOICES[$REPO]:-${DEFAULT_BRANCHES[$REPO]}}"
     if [[ "$REPO" == "spriced-ui" ]]; then
-        BRANCH="${UI_BRANCH}"
-        ENV_ARG="${UI_BUILD_ENV_CHOSEN}"
-        SEPARATOR_ARG="${UI_URL_SEPARATOR}"
-        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"$ENV_ARG\" \"$BRANCH\" \"$SEPARATOR_ARG\"")
+        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"$UI_BUILD_ENV_CHOSEN\" \"$current_repo_branch\" \"$UI_URL_SEPARATOR\"")
     elif [[ "$REPO" == "spriced-client-cummins-parts-pricing" ]]; then
-        CLIENT_BRANCH="${CLIENT_PRICING_BRANCH}"
-        BACKEND_BRANCH_ARG="${BACKEND_DEP_BRANCH}"
-        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"${CLIENT_BRANCH}\" \"${BACKEND_BRANCH_ARG}\"")
+        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"$CLIENT_PRICING_BRANCH\" \"$BACKEND_DEP_BRANCH\"")
+    elif [[ "$REPO" == "spriced-excel-add-in" ]]; then
+        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"$current_repo_branch\" \"$EXCEL_ADDIN_ENV\"")
     else
-        BRANCH="${BRANCH_CHOICES[$REPO]}"
-        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"${BRANCH}\"")
+        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"$current_repo_branch\"")
     fi
 done
 
-# --- Phase 4: Parallel execution ---
 CPU_CORES=$(nproc)
 MAX_JOBS=$(( (CPU_CORES * 80 + 99) / 100 ))
-
 echo -e "\n🚀 Running ${#COMMANDS[@]} builds in parallel, limited to ~80% of CPU capacity..."
 
 if [ ${#COMMANDS[@]} -eq 0 ]; then
@@ -536,8 +560,8 @@ set -e
 
 END_TIME=$(date +"%Y-%m-%d %H:%M:%S")
 
-# --- Phase 5: Summary Output ---
 echo -e "\n Build Summary:\n"
+
 SUMMARY_CSV_FILE="$LOG_DIR/build-summary-${DATE_TAG}.csv"
 
 if [[ -f "$TRACKER_FILE" ]]; then
@@ -545,7 +569,6 @@ if [[ -f "$TRACKER_FILE" ]]; then
     echo "Script End Time,$END_TIME" >> "$SUMMARY_CSV_FILE"
     echo "---" >> "$SUMMARY_CSV_FILE"
     echo "Status,Repository,Log File" >> "$SUMMARY_CSV_FILE"
-    
     while IFS=',' read -r REPO STATUS LOGFILE; do
         if [[ "$STATUS" == "SUCCESS" ]]; then
             echo "[DONE] $REPO - see log: $LOGFILE"
@@ -561,5 +584,4 @@ fi
 
 echo "Detailed build summary also available at: $SUMMARY_CSV_FILE"
 echo -e "\n Script execution complete."
-
 exit $PARALLEL_EXIT_CODE
