@@ -26,10 +26,12 @@ command -v npx >/dev/null || { echo " 'npx' not found. Install Node.js first."; 
 # === Path Definitions ===
 REPO="spriced-ui"
 REPO_DIR="$BASE_DIR/repos/$REPO"
+# --- ⚠️ MODIFIED HERE ⚠️ ---
+# Set the base build directory to match your desired path structure.
 BUILD_OUTPUT_ROOT_DIR="$BASE_DIR/builds/$REPO/$ENV"
-TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
-BUILD_DIR="$BUILD_OUTPUT_ROOT_DIR/$TIMESTAMP"
-# Determine the pipeline configuration directory
+# The BUILD_DIR now uses the branch name and "latest" as requested.
+BUILD_DIR="$BUILD_OUTPUT_ROOT_DIR/$BRANCH/latest"
+# Determine the pipeline configuration directory.
 PIPELINE_DIR="$BASE_DIR/spriced-pipeline"
 CONFIG_PIPELINE_BASE="$PIPELINE_DIR/framework/frontend"
 
@@ -60,12 +62,10 @@ git reset --hard "origin/$BRANCH"
 
 # Step 2: Inject .env files for the build process
 echo " Injecting environment files from spriced-pipeline into repository..."
-# Check if the environment is a full URL or a standard name
+# This part remains the same, as it handles the .env files.
 if [[ "$ENV" =~ ^https?:\/\/.*simadvisory\.com$ ]]; then
-    # Use 'dev' as the source for .env files when a full URL is provided
     SOURCE_ENV_DIR="$CONFIG_PIPELINE_BASE/nrp-dev"
 else
-    # Use the provided environment name for the source directory
     SOURCE_ENV_DIR="$CONFIG_PIPELINE_BASE/nrp-$ENV"
 fi
 if [ ! -d "$SOURCE_ENV_DIR" ]; then
@@ -93,67 +93,44 @@ echo "Building projects with Nx..."
 rm -rf dist/
 npx nx run-many --target=build --projects=$(IFS=,; echo "${MICROFRONTENDS[*]}") --configuration=production
 
-# Step 5: Copy build artifacts and update URLs
-echo " Copying build artifacts and updating URLs..."
+# Step 4.5: Copy the pre-existing Module Federation Manifest Files
+echo " Copying pre-existing Module Federation manifest file from pipeline repo..."
+
+# --- ⚠️ MODIFIED HERE ⚠️ ---
+# The source for the manifest file is now explicitly set to the 'nrp-dev' folder,
+# regardless of the chosen environment. This ensures relative paths are always used.
+MANIFEST_SOURCE_FILE="$CONFIG_PIPELINE_BASE/nrp-dev/module-federation.manifest.json"
+
+# Check if the standard manifest file exists
+if [ ! -f "$MANIFEST_SOURCE_FILE" ]; then
+    echo " Standard manifest file not found at '$MANIFEST_SOURCE_FILE'. Cannot proceed."
+    exit 1
+fi
+
+# Destination paths remain the same
+MANIFEST_DEST_ROOT="$REPO_DIR/dist/apps/module-federation.manifest.json"
+MANIFEST_DEST_CONTAINER="$REPO_DIR/dist/apps/spriced-container/assets/module-federation.manifest.json"
+
+# Copy the standard manifest file to both required locations
+cp "$MANIFEST_SOURCE_FILE" "$MANIFEST_DEST_ROOT"
+mkdir -p "$(dirname "$MANIFEST_DEST_CONTAINER")"
+cp "$MANIFEST_SOURCE_FILE" "$MANIFEST_DEST_CONTAINER"
+
+echo "  - Copied standard manifest file to '$MANIFEST_DEST_ROOT'."
+echo "  - Copied standard manifest file to '$MANIFEST_DEST_CONTAINER'."
+
+# Step 5: Copy build artifacts
+echo " Copying build artifacts..."
+# Remove the existing 'latest' directory before copying to ensure it's a fresh build.
+if [ -d "$BUILD_DIR" ]; then
+    rm -rf "$BUILD_DIR"
+    echo "  - Removed old build directory: $BUILD_DIR"
+fi
 mkdir -p "$BUILD_DIR"
 if [ ! -d "$REPO_DIR/dist/apps" ]; then
     echo " Nx build output not found. The build may have failed."
     exit 1
 fi
-# Copy all the built applications
 cp -r "$REPO_DIR/dist/apps/"* "$BUILD_DIR/"
 
-# Copy .env files to the final build directory and update URLs
-echo " Copying and updating .env files to final build directory..."
-for mf in "${MICROFRONTENDS[@]}"; do
-    DEST_ENV_DIR="$BUILD_DIR/$mf"
-    mkdir -p "$DEST_ENV_DIR"
-    cp "$REPO_DIR/apps/$mf/.env" "$DEST_ENV_DIR/"
-done
-
-# Determine the new URL based on user input for .env files
-if [[ "$ENV" =~ ^https?:\/\/.*simadvisory\.com$ ]]; then
-    NEW_URL_BASE=$(echo "$ENV" | sed -E 's#https?://(.*)#\1#')
-    # Updated regex to match any subdomain under simadvisory.com, not just 'nrp'.
-    REPLACE_REGEX="s#(https?|wss?)://[^/]+\.simadvisory\.com#\1://${NEW_URL_BASE}#g"
-else
-    # The replacement logic for non-URL environments remains specific to the 'nrp' subdomain.
-    if [[ "$URL_SEPARATOR" == "-" ]]; then
-        REPLACE_REGEX="s#(https?|wss?)://nrp[-.]?[^.]*\.simadvisory\.com#\1://nrp-${ENV}.alpha.simadvisory.com#g"
-    else
-        REPLACE_REGEX="s#(https?|wss?)://nrp[-.]?[^.]*\.simadvisory\.com#\1://nrp.${ENV}.simadvisory.com#g"
-    fi
-fi
-
-# Process and update URLs in the .env files in the final build directory
-echo " Processing and updating URLs in .env files in final build directories..."
-for mf in "${MICROFRONTENDS[@]}"; do
-    DEST_ENV_FILE="$BUILD_DIR/$mf/.env"
-    if [[ -f "$DEST_ENV_FILE" ]]; then
-        # This sed command applies the new regex to all lines except the one containing NX_KEY_CLOAK_URL
-        sed -i -E "/NX_KEY_CLOAK_URL/!${REPLACE_REGEX}" "$DEST_ENV_FILE"
-        echo "  - Processed and updated URLs in .env for '$mf'."
-    else
-        echo "  - .env file not found for '$mf'. Skipping URL update."
-    fi
-done
-
-# === UPDATED LOGIC FOR MANIFEST FILE ===
-# Copy the manifest file without changing its content.
-echo " Copying manifest file without modification..."
-MANIFEST_SOURCE="$SOURCE_ENV_DIR/module-federation.manifest.json"
-cp "$MANIFEST_SOURCE" "$BUILD_DIR/module-federation.manifest.json"
-echo "  - Manifest copied to build directory."
-
-# Create a symlink to the latest build
-LATEST_LINK="$BUILD_OUTPUT_ROOT_DIR/latest"
-if [ -e "$LATEST_LINK" ]; then
-    rm "$LATEST_LINK"
-fi
-ln -s "$BUILD_DIR" "$LATEST_LINK"
-
-echo " Build of spriced-ui completed successfully."
-echo "Final build output available at: $BUILD_DIR"
-echo "Symbolic link 'latest' created at: $LATEST_LINK"
-exit 0
-
+echo "UI build finished successfully."
