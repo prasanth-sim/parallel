@@ -234,29 +234,11 @@ for repo_name_to_process in "${REPOS[@]}"; do
         SCRIPT_PATH_FOR_REPO="${BUILD_SCRIPTS[$i]}"
         REPO_DIR="$CLONE_DIR/$REPO"
         DEFAULT_REPO_BRANCH="${DEFAULT_BRANCHES[$REPO]}"
-
-        echo -e "\nChecking '$REPO' repository..."
-        if [[ -d "$REPO_DIR/.git" ]]; then
-            echo "Updating existing repo at $REPO_DIR"
-            (
-                cd "$REPO_DIR" || exit 1
-                git fetch origin --prune
-                git reset --hard HEAD
-                git clean -fd
-                if git rev-parse --verify "origin/$DEFAULT_REPO_BRANCH" >/dev/null 2>&1; then
-                    git checkout -B "$DEFAULT_REPO_BRANCH" origin/"$DEFAULT_REPO_BRANCH"
-                else
-                    echo "Remote branch origin/$DEFAULT_REPO_BRANCH not found. Skipping '$REPO'..."
-                    exit 1
-                fi
-            ) || { echo "Failed to prepare $REPO. Skipping its build."; unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
-        else
-            echo "Cloning new repo from ${REPO_URLS[$REPO]} into "$REPO_DIR""
-            [[ -d "$REPO_DIR" && ! -d "$REPO_DIR/.git" ]] && rm -rf "$REPO_DIR"
-            git clone "${REPO_URLS[$REPO]}" "$REPO_DIR" || { echo "Failed to clone $REPO. Skipping its build."; unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
-            (cd "$REPO_DIR" || exit 1) || { echo "Failed to enter $REPO directory. Skipping its build."; unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
-        fi
-
+        
+        # We no longer handle the manifest copying here. The build script handles it.
+        # Just prepare the repository with a clean checkout.
+        prepare_repo "$REPO" "$REPO_DIR" "$DEFAULT_REPO_BRANCH" || { unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
+        
         # --- Collect user input for branch/environment ---
         if [[ "$REPO" == "spriced-ui" ]]; then
             PIPELINE_DIR="$BASE_DIR/spriced-pipeline"
@@ -363,11 +345,6 @@ for repo_name_to_process in "${REPOS[@]}"; do
                 UI_URL_SEPARATOR="${SEPARATOR_INPUT:-$DEFAULT_SEPARATOR}"
             fi
 
-            BACKUP_DIR="/tmp/spriced_ui_backup_$DATE_TAG"
-            mkdir -p "$BACKUP_DIR"
-            find "$REPO_DIR/apps/" -maxdepth 2 -type f -name ".env" -exec mv {} "$BACKUP_DIR" \; 2>/dev/null || true
-            mv "$REPO_DIR/package-lock.json" "$BACKUP_DIR/" 2>/dev/null || true
-
             (
                 cd "$REPO_DIR" || exit 1
                 git fetch origin
@@ -379,10 +356,7 @@ for repo_name_to_process in "${REPOS[@]}"; do
                     exit 1
                 fi
             ) || { unset SELECTED_REPOS_MAP["$repo_name_to_process"]; continue; }
-            echo "Restoring backed up .env files and package-lock.json..."
-            find "$BACKUP_DIR" -maxdepth 1 -type f -name ".env" -exec cp {} "$REPO_DIR/apps/" \; 2>/dev/null || true
-            cp "$BACKUP_DIR/package-lock.json" "$REPO_DIR/" 2>/dev/null || true
-            rm -rf "$BACKUP_DIR"
+            
         # --- Special handling for 'spriced-client-cummins-parts-pricing' ---
         elif [[ "$REPO" == "spriced-client-cummins-parts-pricing" ]]; then
             DEFAULT_CLIENT_BRANCH="${CLIENT_PRICING_BRANCH:-$DEFAULT_REPO_BRANCH}"
@@ -534,7 +508,7 @@ for repo_name in "${!SELECTED_REPOS_MAP[@]}"; do
     LOG_FILE="$LOG_DIR/${REPO}_$(date +%Y%m%d%H%M%S).log"
     current_repo_branch="${BRANCH_CHOICES[$REPO]:-${DEFAULT_BRANCHES[$REPO]}}"
     if [[ "$REPO" == "spriced-ui" ]]; then
-        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"$UI_BUILD_ENV_CHOSEN\" \"$current_repo_branch\" \"$UI_URL_SEPARATOR\"")
+        COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"$current_repo_branch\" \"$UI_BUILD_ENV_CHOSEN\" \"$UI_URL_SEPARATOR\"")
     elif [[ "$REPO" == "spriced-client-cummins-parts-pricing" ]]; then
         COMMANDS+=("build_and_log_repo \"$REPO\" \"$SCRIPT\" \"$LOG_FILE\" \"$TRACKER_FILE\" \"$BASE_DIR\" \"$CLIENT_PRICING_BRANCH\" \"$BACKEND_DEP_BRANCH\"")
     elif [[ "$REPO" == "spriced-excel-add-in" ]]; then
